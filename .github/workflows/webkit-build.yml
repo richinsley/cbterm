@@ -6,13 +6,15 @@ on:
       webkit_ref:
         description: 'WebKit branch/tag/commit'
         required: false
-        default: 'main'
+        default: 'releases/Apple/Safari-17.5-macOS-14.5'
   schedule:
     # Weekly build on Sundays at 2am UTC
     - cron: '0 2 * * 0'
 
 env:
-  WEBKIT_REF: ${{ github.event.inputs.webkit_ref || 'main' }}
+  # Use Safari 17.5 release - compatible with Xcode 15.4 on macos-14 runners
+  # (main branch requires Swift 6.0 / Xcode 16+)
+  WEBKIT_REF: ${{ github.event.inputs.webkit_ref || 'releases/Apple/Safari-17.5-macOS-14.5' }}
 
 jobs:
   build-macos-arm64:
