@@ -1,0 +1,30 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+go.sum
+
+# Node
+node_modules/
+frontend/dist/
+
+# WebKit build artifacts
+webkit/lib/
+WebKit/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.log
+*.tmp
