@@ -17,17 +17,26 @@ env:
 jobs:
   build-macos-arm64:
     runs-on: macos-14
-    timeout-minutes: 240
+    timeout-minutes: 360
     
     steps:
       - name: Checkout term repo
         uses: actions/checkout@v4
 
+      - name: Free up disk space
+        run: |
+          # Remove unnecessary tools to free disk space
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/lib/android
+          df -h
+          
       - name: Install dependencies
         run: |
-          brew install cmake ninja ccache
+          brew install ccache
+          # WebKit's build-webkit script handles other deps
           
-      - name: Cache ccache
+      - name: Setup ccache
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/ccache
@@ -45,8 +54,10 @@ jobs:
       - name: Clone WebKit
         run: |
           if [ ! -d "WebKit" ]; then
+            echo "Cloning WebKit..."
             git clone --depth 1 --branch ${{ env.WEBKIT_REF }} https://github.com/WebKit/WebKit.git
           else
+            echo "Updating existing WebKit checkout..."
             cd WebKit
             git fetch --depth 1 origin ${{ env.WEBKIT_REF }}
             git checkout FETCH_HEAD
@@ -54,80 +65,73 @@ jobs:
           
       - name: Apply patches
         run: |
-          if [ -d "webkit/patches" ]; then
+          if [ -d "webkit/patches" ] && [ "$(ls -A webkit/patches/*.patch 2>/dev/null)" ]; then
             cd WebKit
             for patch in ../webkit/patches/*.patch; do
-              [ -f "$patch" ] && git apply "$patch" || true
+              echo "Applying $patch..."
+              git apply "$patch" || echo "Patch $patch failed, continuing..."
             done
           fi
 
-      - name: Configure WebKit (Minimal Build)
+      - name: Build WebKit (Official Script)
         run: |
           cd WebKit
-          mkdir -p build
-          cd build
           
-          # Minimal build for embedding - disable features we don't need
-          cmake .. -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DPORT=Mac \
-            -DENABLE_MINIBROWSER=OFF \
-            -DENABLE_WEBKIT=ON \
-            -DENABLE_WEBCORE=ON \
-            -DENABLE_JAVASCRIPTCORE=ON \
-            -DENABLE_WEBGL=OFF \
-            -DENABLE_WEBGPU=OFF \
-            -DENABLE_WEB_RTC=OFF \
-            -DENABLE_MEDIA_STREAM=OFF \
-            -DENABLE_WEB_AUDIO=OFF \
-            -DENABLE_VIDEO=OFF \
-            -DENABLE_SPEECH_SYNTHESIS=OFF \
-            -DENABLE_GAMEPAD=OFF \
-            -DENABLE_GEOLOCATION=OFF \
-            -DENABLE_NOTIFICATIONS=OFF \
-            -DENABLE_ORIENTATION_EVENTS=OFF \
-            -DENABLE_DEVICE_ORIENTATION=OFF \
-            -DENABLE_POINTER_LOCK=OFF \
-            -DENABLE_REMOTE_INSPECTOR=OFF \
-            -DENABLE_DRAG_SUPPORT=ON \
-            -DENABLE_SPELLCHECK=OFF \
-            -DENABLE_FTPDIR=OFF \
-            -DENABLE_NETSCAPE_PLUGIN_API=OFF \
-            -DENABLE_PDF_PLUGIN=OFF \
-            -DENABLE_APPLE_PAY=OFF \
-            -DENABLE_PDFKIT_PLUGIN=OFF \
-            -DUSE_SYSTEM_MALLOC=ON
-
-      - name: Build WebKit
-        run: |
-          cd WebKit/build
-          # Limit parallelism to avoid OOM
-          ninja -j4 WebKit
+          # Configure ccache
+          export PATH="/usr/local/opt/ccache/libexec:$PATH"
+          export CCACHE_DIR=~/Library/Caches/ccache
+          export CCACHE_MAXSIZE=10G
+          ccache --zero-stats
+          
+          # Use official build-webkit script
+          # --release: Release build
+          # --architecture=arm64: Target architecture  
+          # The script handles all cmake configuration properly
+          Tools/Scripts/build-webkit \
+            --release \
+            --architecture=arm64 \
+            --no-experimental-features \
+            2>&1 | tee build.log
+          
+          # Show ccache stats
+          ccache --show-stats
           
       - name: Package WebKit Framework
         run: |
-          cd WebKit/build
+          cd WebKit
           mkdir -p dist
           
-          # Copy the built framework
-          if [ -d "Release/WebKit.framework" ]; then
-            cp -R Release/WebKit.framework dist/
-          elif [ -d "bin/WebKit.framework" ]; then
-            cp -R bin/WebKit.framework dist/
-          fi
+          # Find and copy the built frameworks
+          # build-webkit puts output in WebKitBuild/Release
+          BUILD_DIR="WebKitBuild/Release"
           
-          # Also need JavaScriptCore
-          if [ -d "Release/JavaScriptCore.framework" ]; then
-            cp -R Release/JavaScriptCore.framework dist/
-          elif [ -d "bin/JavaScriptCore.framework" ]; then
-            cp -R bin/JavaScriptCore.framework dist/
+          if [ -d "$BUILD_DIR" ]; then
+            echo "Contents of $BUILD_DIR:"
+            ls -la "$BUILD_DIR"
+            
+            # Copy frameworks
+            for framework in WebKit JavaScriptCore WebCore; do
+              if [ -d "$BUILD_DIR/$framework.framework" ]; then
+                echo "Copying $framework.framework..."
+                cp -R "$BUILD_DIR/$framework.framework" dist/
+              fi
+            done
+          else
+            echo "Build directory not found at $BUILD_DIR"
+            find WebKitBuild -name "*.framework" -type d 2>/dev/null | head -20
+            exit 1
           fi
           
           # Create tarball
           cd dist
-          tar -czvf webkit-macos-arm64.tar.gz *.framework
+          if [ "$(ls -A *.framework 2>/dev/null)" ]; then
+            tar -czvf webkit-macos-arm64.tar.gz *.framework
+            echo "Created webkit-macos-arm64.tar.gz"
+            ls -lh webkit-macos-arm64.tar.gz
+          else
+            echo "No frameworks found to package!"
+            exit 1
+          fi
           
       - name: Get WebKit version
         id: webkit-version
@@ -140,29 +144,26 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: webkit-macos-arm64-${{ steps.webkit-version.outputs.date }}
-          path: WebKit/build/dist/webkit-macos-arm64.tar.gz
+          path: WebKit/dist/webkit-macos-arm64.tar.gz
           retention-days: 90
 
-      - name: Create Release (on schedule or manual)
+      - name: Create Release
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: webkit-${{ steps.webkit-version.outputs.date }}-${{ steps.webkit-version.outputs.sha }}
           name: WebKit Build ${{ steps.webkit-version.outputs.date }}
           body: |
-            Automated WebKit build from source.
+            Automated WebKit build from source using official build-webkit script.
             
             - WebKit commit: ${{ steps.webkit-version.outputs.sha }}
             - Build date: ${{ steps.webkit-version.outputs.date }}
-            - Platform: macOS ARM64
+            - Platform: macOS ARM64 (Apple Silicon)
+            - Build type: Release
             
-            This is a minimal build with disabled features:
-            - No WebGL/WebGPU
-            - No WebRTC
-            - No Web Audio/Video
-            - No Speech/Geolocation/Gamepad
+            Built with `--no-experimental-features` for stability.
           files: |
-            WebKit/build/dist/webkit-macos-arm64.tar.gz
+            WebKit/dist/webkit-macos-arm64.tar.gz
           draft: false
           prerelease: false
         env:
