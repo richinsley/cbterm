@@ -27,10 +27,8 @@ dev:
 
 # Build frontend (xterm.js)
 frontend:
-	@if [ ! -d "frontend/node_modules" ]; then \
-		echo "Installing frontend dependencies..."; \
-		cd frontend && npm install; \
-	fi
+	@echo "Installing frontend dependencies..."
+	@cd frontend && npm install --silent
 	@echo "Building frontend..."
 	@cd frontend && npm run build
 
