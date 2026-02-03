@@ -56,6 +56,18 @@ Project context for AI agents working on this codebase.
   - UTF-8/Unicode (Powerline fonts, Nerd Fonts) working
   - Window resize propagates to PTY
 
+### 2026-02-03: Clipboard & Multi-Window
+- **Clipboard support**
+  - Cmd+C copies selected text
+  - Cmd+V pastes from system clipboard
+  - Cmd+A selects all
+  - Uses browser Clipboard API via attachCustomKeyEventHandler
+- **Multi-window support**
+  - Cmd+N creates new terminal window
+  - Each window has independent terminal session
+  - App quits when last window closes
+  - Refactored to App/TerminalWindow structure
+
 ---
 
 ## Work To Do
