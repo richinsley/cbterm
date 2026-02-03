@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/calobozan/term/internal/app"
+	"github.com/calobozan/cbterm/internal/app"
 )
 
 var (

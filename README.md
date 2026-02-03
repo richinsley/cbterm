@@ -1,4 +1,4 @@
-# Term
+# cbterm
 
 A modern terminal emulator built with Go, WebKit, and xterm.js — designed from the ground up for AI integration.
 
@@ -7,7 +7,7 @@ A modern terminal emulator built with Go, WebKit, and xterm.js — designed from
 - **Single binary** — no runtime dependencies
 - **AI-native** — structured protocols for AI interaction, not bolted-on hacks
 - **Extensible** — custom terminal protocol extensions (inspired by Kitty)
-- **Cross-platform** — macOS first, Linux and Windows planned
+- **Cross-platform** — macOS first, Linux planned
 
 ## Architecture
 
@@ -45,7 +45,7 @@ make webkit-download
 make build
 
 # Run
-./bin/term
+./bin/cbterm
 ```
 
 ### Building WebKit from Source
@@ -58,7 +58,7 @@ gh workflow run webkit-build.yml
 
 ## Protocol Extensions
 
-Term implements custom terminal protocol extensions for AI integration. See [protocol/SPEC.md](protocol/SPEC.md) for details.
+cbterm implements custom terminal protocol extensions for AI integration. See [protocol/SPEC.md](protocol/SPEC.md) for details.
 
 ## License
 

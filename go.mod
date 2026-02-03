@@ -1,4 +1,4 @@
-module github.com/calobozan/term
+module github.com/calobozan/cbterm
 
 go 1.22
 

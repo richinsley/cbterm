@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/calobozan/term/internal/pty"
-	"github.com/calobozan/term/internal/protocol"
+	"github.com/calobozan/cbterm/internal/pty"
+	"github.com/calobozan/cbterm/internal/protocol"
 	"github.com/gorilla/websocket"
 )
 

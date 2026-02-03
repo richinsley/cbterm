@@ -1,15 +1,15 @@
 .PHONY: all build clean run dev webkit-download frontend
 
-BINARY := bin/term
+BINARY := bin/cbterm
 WEBKIT_VERSION ?= latest
-REPO := calobozan/term
+REPO := calobozan/cbterm
 
 all: build
 
 # Build the Go binary
 build: frontend
 	@mkdir -p bin
-	CGO_ENABLED=1 go build -o $(BINARY) ./cmd/term
+	CGO_ENABLED=1 go build -o $(BINARY) ./cmd/cbterm
 
 # Run the terminal
 run: build
@@ -47,7 +47,7 @@ clean:
 
 # Show help
 help:
-	@echo "term - AI-native terminal emulator"
+	@echo "cbterm - AI-native terminal emulator"
 	@echo ""
 	@echo "Commands:"
 	@echo "  make build          - Build the terminal binary"
