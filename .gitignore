@@ -28,3 +28,4 @@ WebKit/
 # Build artifacts
 *.log
 *.tmp
+cbterm
