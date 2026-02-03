@@ -56,23 +56,31 @@ export class TabManager {
     constructor(container: HTMLElement, postMessage: MessageHandler) {
         this.postMessage = postMessage;
         
-        // Create tab bar
         this.tabBar = document.createElement('div');
         this.tabBar.className = 'tab-bar';
+        // Initialize as hidden since we start with 0 tabs before createTab is called
+        this.tabBar.classList.add('hidden'); 
         container.appendChild(this.tabBar);
         
-        // Create content area
         this.contentArea = document.createElement('div');
         this.contentArea.className = 'tab-content';
         container.appendChild(this.contentArea);
         
-        // Add new tab button
         this.renderTabBar();
-        
-        // Handle keyboard shortcuts
         document.addEventListener('keydown', this.handleKeyDown.bind(this));
     }
     
+    // Helper method to manage visibility
+    private updateTabBarVisibility(): void {
+        if (this.tabs.size > 1) {
+            this.tabBar.classList.remove('hidden');
+        } else {
+            this.tabBar.classList.add('hidden');
+        }
+        // Trigger a resize to ensure xterm.js fills the newly available space
+        this.handleResize();
+    }
+
     // Create a new tab with a single terminal pane
     createTab(title?: string): Tab {
         const tabId = `tab-${++this.tabCounter}`;
@@ -87,6 +95,9 @@ export class TabManager {
         this.tabs.set(tabId, tab);
         this.renderTabBar();
         this.activateTab(tabId);
+        
+        // Update visibility after adding
+        this.updateTabBarVisibility();
         
         return tab;
     }
@@ -387,23 +398,21 @@ export class TabManager {
         const tab = this.tabs.get(tabId);
         if (!tab) return;
         
-        // Dispose all terminals in tab
         this.disposePane(tab.rootPane);
-        
         this.tabs.delete(tabId);
         
-        // If this was the active tab, activate another
         if (this.activeTabId === tabId) {
             const remaining = Array.from(this.tabs.keys());
             if (remaining.length > 0) {
                 this.activateTab(remaining[remaining.length - 1]);
             } else {
-                // No more tabs - create a new one or quit
                 this.createTab();
             }
         }
         
         this.renderTabBar();
+        // Update visibility after removing
+        this.updateTabBarVisibility();
     }
     
     // Set active pane (for focus)

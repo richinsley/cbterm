@@ -8,6 +8,10 @@
     -webkit-app-region: drag;
 }
 
+.tab-bar.hidden {
+    display: none;
+}
+
 .tab {
     display: flex;
     align-items: center;
