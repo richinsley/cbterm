@@ -421,14 +421,29 @@ export class TabManager {
             paneEl.classList.add('focused');
         }
         
-        // Focus the terminal
+        // Focus/blur terminals
         if (!this.activeTabId) return;
         const tab = this.tabs.get(this.activeTabId);
         if (!tab) return;
         
+        // Blur all terminals in this tab, then focus the active one
+        this.blurAllTerminals(tab.rootPane);
+        
         const pane = this.findPane(tab.rootPane, paneId);
         if (pane?.terminal) {
             pane.terminal.terminal.focus();
+        }
+    }
+    
+    // Blur all terminals in a pane tree
+    private blurAllTerminals(pane: Pane): void {
+        if (pane.terminal) {
+            pane.terminal.terminal.blur();
+        }
+        if (pane.children) {
+            for (const child of pane.children) {
+                this.blurAllTerminals(child);
+            }
         }
     }
     
@@ -849,8 +864,6 @@ export class TabManager {
         
         const menu = document.createElement('div');
         menu.className = 'pane-context-menu';
-        menu.style.left = `${x}px`;
-        menu.style.top = `${y}px`;
         
         const items = [
             { label: 'Split Vertically', action: () => { this.setActivePane(paneId); this.splitPane('vertical'); } },
@@ -878,7 +891,31 @@ export class TabManager {
             }
         }
         
+        // Add to DOM
         document.body.appendChild(menu);
+        
+        // Position menu, clamping to viewport
+        const menuRect = menu.getBoundingClientRect();
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        
+        let menuX = x;
+        let menuY = y;
+        
+        // Clamp to right edge
+        if (menuX + menuRect.width > viewportWidth) {
+            menuX = viewportWidth - menuRect.width - 8;
+        }
+        // Clamp to bottom edge
+        if (menuY + menuRect.height > viewportHeight) {
+            menuY = viewportHeight - menuRect.height - 8;
+        }
+        // Clamp to left/top edges
+        menuX = Math.max(8, menuX);
+        menuY = Math.max(8, menuY);
+        
+        menu.style.left = `${menuX}px`;
+        menu.style.top = `${menuY}px`;
         
         // Close on click outside
         const closeHandler = (e: MouseEvent) => {
