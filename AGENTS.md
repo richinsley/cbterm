@@ -66,7 +66,13 @@ Project context for AI agents working on this codebase.
 - [x] WebSocket bridge between PTY and xterm.js
 - [x] Basic terminal working end-to-end
 
-### Phase 2: Custom WebKit Integration
+### Phase 2: Extension Foundation
+- [ ] JS extension loading mechanism
+- [ ] Extension ↔ Go message protocol
+- [ ] Enable more xterm.js addons (search, image, serialize)
+- [ ] Simple extension API
+
+### Phase 3: Custom WebKit Integration
 - [ ] Load custom WebKit.framework instead of system WebKit
 - [ ] Implement OSC 7776 protocol extension in WebKit
 - [ ] Bridge custom protocol to Go backend
