@@ -22,6 +22,26 @@ var (
 	commit  = "none"
 )
 
+// App holds global application state
+type App struct {
+	platform    *darwin.Platform
+	shell       string
+	debug       bool
+	frontendURL string
+
+	mu      sync.Mutex
+	windows map[*darwin.Window]*TerminalWindow
+}
+
+// TerminalWindow holds per-window state
+type TerminalWindow struct {
+	window   *darwin.Window
+	terminal *terminal.Terminal
+	mu       sync.Mutex
+}
+
+var app *App
+
 func main() {
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug mode (developer tools)")
@@ -42,112 +62,145 @@ func main() {
 		log.Fatalf("Failed to initialize platform: %v", err)
 	}
 
-	// Create main window
-	win, err := p.NewWindow(darwin.WindowOptions{
-		Title:     "cbterm",
-		Width:     800,
-		Height:    600,
-		Resizable: true,
-	})
-	if err != nil {
-		log.Fatalf("Failed to create window: %v", err)
-	}
-
-	// Terminal instance (created after we know the size)
-	var term *terminal.Terminal
-	var termMu sync.Mutex
-
-	// Handle messages from JavaScript
-	win.GetWebView().OnMessage(func(msg string) {
-		var m struct {
-			Type string `json:"type"`
-			Data string `json:"data"`
-			Cols int    `json:"cols"`
-			Rows int    `json:"rows"`
-		}
-		if err := json.Unmarshal([]byte(msg), &m); err != nil {
-			log.Printf("Invalid message: %s", msg)
-			return
-		}
-
-		switch m.Type {
-		case "ready":
-			// Frontend is ready, start terminal
-			log.Printf("Frontend ready, terminal size: %dx%d", m.Cols, m.Rows)
-			termMu.Lock()
-			if term == nil {
-				var err error
-				term, err = terminal.New(terminal.Options{
-					Shell: *shell,
-					Cols:  uint16(m.Cols),
-					Rows:  uint16(m.Rows),
-					OnOutput: func(data string) {
-						// Write to terminal via native bridge (async, non-blocking)
-						js := fmt.Sprintf("window.cbterm.write('%s')", data)
-						win.GetWebView().EvalAsync(js)
-					},
-				})
-				if err != nil {
-					log.Printf("Failed to create terminal: %v", err)
-				}
-			}
-			termMu.Unlock()
-
-		case "input":
-			// Input from user
-			termMu.Lock()
-			if term != nil {
-				term.Write(m.Data)
-			}
-			termMu.Unlock()
-
-		case "resize":
-			// Terminal resized
-			termMu.Lock()
-			if term != nil && m.Cols > 0 && m.Rows > 0 {
-				term.Resize(uint16(m.Rows), uint16(m.Cols))
-				log.Printf("Resized to %dx%d", m.Cols, m.Rows)
-			}
-			termMu.Unlock()
-		}
-	})
-
-	// Build app menu
-	buildAppMenu(p, win)
-
-	// Serve frontend
+	// Serve frontend (shared across all windows)
 	frontendURL, err := serveFrontend()
 	if err != nil {
 		log.Fatalf("Failed to serve frontend: %v", err)
 	}
 	log.Printf("Frontend: %s", frontendURL)
 
-	// Load frontend
-	win.GetWebView().LoadURL(frontendURL)
+	// Create app
+	app = &App{
+		platform:    p,
+		shell:       *shell,
+		debug:       *debug,
+		frontendURL: frontendURL,
+		windows:     make(map[*darwin.Window]*TerminalWindow),
+	}
 
-	// Handle window close
-	win.OnClose(func() bool {
-		termMu.Lock()
-		if term != nil {
-			term.Close()
-		}
-		termMu.Unlock()
-		return true
-	})
+	// Build app menu
+	buildAppMenu()
 
-	// Show window and run
-	win.Show()
+	// Create first window
+	if err := app.NewWindow(); err != nil {
+		log.Fatalf("Failed to create window: %v", err)
+	}
 
+	// Run
 	if err := p.Run(); err != nil {
 		log.Fatalf("Platform error: %v", err)
 	}
 }
 
+// NewWindow creates a new terminal window
+func (a *App) NewWindow() error {
+	win, err := a.platform.NewWindow(darwin.WindowOptions{
+		Title:     "cbterm",
+		Width:     800,
+		Height:    600,
+		Resizable: true,
+	})
+	if err != nil {
+		return err
+	}
+
+	tw := &TerminalWindow{
+		window: win,
+	}
+
+	// Register window
+	a.mu.Lock()
+	a.windows[win] = tw
+	a.mu.Unlock()
+
+	// Handle messages from JavaScript
+	win.GetWebView().OnMessage(func(msg string) {
+		tw.handleMessage(msg)
+	})
+
+	// Handle window close
+	win.OnClose(func() bool {
+		tw.mu.Lock()
+		if tw.terminal != nil {
+			tw.terminal.Close()
+		}
+		tw.mu.Unlock()
+
+		a.mu.Lock()
+		delete(a.windows, win)
+		remaining := len(a.windows)
+		a.mu.Unlock()
+
+		log.Printf("Window closed, %d remaining", remaining)
+
+		// Quit app when last window closes
+		if remaining == 0 {
+			a.platform.Quit()
+		}
+
+		return true
+	})
+
+	// Load frontend and show
+	win.GetWebView().LoadURL(a.frontendURL)
+	win.Show()
+
+	return nil
+}
+
+// handleMessage processes messages from the frontend
+func (tw *TerminalWindow) handleMessage(msg string) {
+	var m struct {
+		Type string `json:"type"`
+		Data string `json:"data"`
+		Cols int    `json:"cols"`
+		Rows int    `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(msg), &m); err != nil {
+		log.Printf("Invalid message: %s", msg)
+		return
+	}
+
+	switch m.Type {
+	case "ready":
+		log.Printf("Frontend ready, terminal size: %dx%d", m.Cols, m.Rows)
+		tw.mu.Lock()
+		if tw.terminal == nil {
+			var err error
+			tw.terminal, err = terminal.New(terminal.Options{
+				Shell: app.shell,
+				Cols:  uint16(m.Cols),
+				Rows:  uint16(m.Rows),
+				OnOutput: func(data string) {
+					js := fmt.Sprintf("window.cbterm.write('%s')", data)
+					tw.window.GetWebView().EvalAsync(js)
+				},
+			})
+			if err != nil {
+				log.Printf("Failed to create terminal: %v", err)
+			}
+		}
+		tw.mu.Unlock()
+
+	case "input":
+		tw.mu.Lock()
+		if tw.terminal != nil {
+			tw.terminal.Write(m.Data)
+		}
+		tw.mu.Unlock()
+
+	case "resize":
+		tw.mu.Lock()
+		if tw.terminal != nil && m.Cols > 0 && m.Rows > 0 {
+			tw.terminal.Resize(uint16(m.Rows), uint16(m.Cols))
+		}
+		tw.mu.Unlock()
+	}
+}
+
 func serveFrontend() (string, error) {
-	// Find frontend dist directory
 	var distPath string
 
-	// Try relative to executable
 	if exe, err := os.Executable(); err == nil {
 		candidate := filepath.Join(filepath.Dir(exe), "..", "frontend", "dist")
 		if _, err := os.Stat(candidate); err == nil {
@@ -155,7 +208,6 @@ func serveFrontend() (string, error) {
 		}
 	}
 
-	// Try relative to current directory
 	if distPath == "" {
 		cwd, _ := os.Getwd()
 		candidate := filepath.Join(cwd, "frontend", "dist")
@@ -180,7 +232,8 @@ func serveFrontend() (string, error) {
 	return fmt.Sprintf("http://%s", listener.Addr().String()), nil
 }
 
-func buildAppMenu(p *darwin.Platform, win *darwin.Window) {
+func buildAppMenu() {
+	p := app.platform
 	menuBar := p.NewMenu()
 
 	// App menu
@@ -204,18 +257,24 @@ func buildAppMenu(p *darwin.Platform, win *darwin.Window) {
 		Label:    "New Window",
 		Shortcut: "Cmd+N",
 		Enabled:  true,
+		Action: func() {
+			if err := app.NewWindow(); err != nil {
+				log.Printf("Failed to create window: %v", err)
+			}
+		},
 	})
 	shellMenu.Add(darwin.MenuItem{
 		Label:    "New Tab",
 		Shortcut: "Cmd+T",
 		Enabled:  true,
+		// TODO: Implement tabs
 	})
 	shellMenu.AddSeparator()
 	shellMenu.Add(darwin.MenuItem{
 		Label:    "Close",
 		Shortcut: "Cmd+W",
 		Enabled:  true,
-		Action:   func() { win.Close() },
+		// Close is handled by the window itself
 	})
 	menuBar.Add(darwin.MenuItem{Label: "Shell", Submenu: shellMenu})
 
@@ -236,7 +295,7 @@ func buildAppMenu(p *darwin.Platform, win *darwin.Window) {
 		Label:    "Reload",
 		Shortcut: "Cmd+R",
 		Enabled:  true,
-		Action:   func() { win.GetWebView().Reload() },
+		// TODO: Reload focused window
 	})
 	menuBar.Add(darwin.MenuItem{Label: "View", Submenu: viewMenu})
 

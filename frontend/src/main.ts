@@ -98,6 +98,62 @@ function sendResize() {
     postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
 }
 
+// Clipboard handling
+async function copyToClipboard() {
+    const selection = term.getSelection();
+    if (selection) {
+        try {
+            await navigator.clipboard.writeText(selection);
+            console.log('Copied to clipboard');
+        } catch (e) {
+            console.error('Failed to copy:', e);
+        }
+    }
+}
+
+async function pasteFromClipboard() {
+    try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+            // Send paste to terminal
+            const encoded = btoa(text);
+            postMessage({ type: 'input', data: encoded });
+        }
+    } catch (e) {
+        console.error('Failed to paste:', e);
+    }
+}
+
+// Handle keyboard shortcuts (Cmd+C, Cmd+V, etc.)
+term.attachCustomKeyEventHandler((event) => {
+    // Cmd+C (copy) - only if there's a selection
+    if (event.metaKey && event.key === 'c' && term.hasSelection()) {
+        if (event.type === 'keydown') {
+            copyToClipboard();
+        }
+        return false; // Prevent default and don't send to PTY
+    }
+    
+    // Cmd+V (paste)
+    if (event.metaKey && event.key === 'v') {
+        if (event.type === 'keydown') {
+            pasteFromClipboard();
+        }
+        return false; // Prevent default and don't send to PTY
+    }
+    
+    // Cmd+A (select all)
+    if (event.metaKey && event.key === 'a') {
+        if (event.type === 'keydown') {
+            term.selectAll();
+        }
+        return false;
+    }
+    
+    // Let other keys through to terminal
+    return true;
+});
+
 // Handle terminal input - send to Go
 term.onData((data) => {
     // Base64 encode for safe transport
@@ -141,6 +197,14 @@ term.onResize(({ cols, rows }) => {
         fitAddon.fit();
         sendResize();
     },
+    
+    // Clipboard
+    copy: copyToClipboard,
+    paste: pasteFromClipboard,
+    getSelection: () => term.getSelection(),
+    hasSelection: () => term.hasSelection(),
+    selectAll: () => term.selectAll(),
+    clearSelection: () => term.clearSelection(),
     
     // Get terminal dimensions
     getSize: () => ({ cols: term.cols, rows: term.rows }),
