@@ -63,105 +63,77 @@ fitAddon.fit();
 // Handle window resize
 window.addEventListener('resize', () => {
     fitAddon.fit();
+    sendResize();
 });
 
 // ResizeObserver for container size changes
 const resizeObserver = new ResizeObserver(() => {
     fitAddon.fit();
+    sendResize();
 });
 resizeObserver.observe(container);
 
-// WebSocket connection to backend
-let ws: WebSocket | null = null;
-let reconnectAttempts = 0;
-const maxReconnectAttempts = 5;
+// Native bridge - communicate directly with Go via WKWebView
+const bridge = (window as any).webkit?.messageHandlers?.cbterm;
 
-function connect() {
-    // Get WebSocket URL from query params or default to same host
-    const params = new URLSearchParams(window.location.search);
-    const wsUrl = params.get('ws') || `ws://${window.location.host}/ws`;
-    
-    console.log(`Connecting to ${wsUrl}...`);
-    ws = new WebSocket(wsUrl);
-    
-    ws.onopen = () => {
-        console.log('WebSocket connected');
-        reconnectAttempts = 0;
-        
-        // Send initial terminal size
-        sendResize();
-        
-        // Notify native side if available
-        postMessage({ type: 'connected' });
-    };
-    
-    ws.onmessage = (event) => {
-        // Write data from PTY to terminal
-        term.write(event.data);
-    };
-    
-    ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        ws = null;
-        
-        // Attempt reconnect
-        if (reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
-            console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`);
-            setTimeout(connect, delay);
-        } else {
-            term.write('\r\n\x1b[31mConnection lost. Reload to reconnect.\x1b[0m\r\n');
-        }
-    };
-    
-    ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-    };
+function postMessage(msg: object | string) {
+    if (bridge) {
+        const data = typeof msg === 'string' ? msg : JSON.stringify(msg);
+        bridge.postMessage(data);
+    }
 }
 
 // Send terminal size to backend
 function sendResize() {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        const size = { cols: term.cols, rows: term.rows };
-        ws.send(JSON.stringify({ type: 'resize', ...size }));
-    }
+    postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
 }
 
-// Handle terminal input
+// Handle terminal input - send to Go
 term.onData((data) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
-    }
+    // Base64 encode for safe transport
+    const encoded = btoa(data);
+    postMessage({ type: 'input', data: encoded });
 });
 
 // Handle terminal resize
 term.onResize(({ cols, rows }) => {
-    sendResize();
+    postMessage({ type: 'resize', cols, rows });
 });
 
-// Native message bridge (for communication with Go backend via WKWebView)
-function postMessage(msg: object) {
-    if ((window as any).webkit?.messageHandlers?.cbterm) {
-        (window as any).webkit.messageHandlers.cbterm.postMessage(JSON.stringify(msg));
-    }
-}
-
-// Expose terminal to global scope for debugging
-(window as any).term = term;
+// API exposed to Go for writing output
 (window as any).cbterm = {
-    write: (data: string) => term.write(data),
+    // Write base64-encoded data to terminal
+    write: (base64Data: string) => {
+        try {
+            const data = atob(base64Data);
+            term.write(data);
+        } catch (e) {
+            console.error('Failed to decode terminal data:', e);
+        }
+    },
+    
+    // Direct write (for simple ASCII)
+    writeRaw: (data: string) => {
+        term.write(data);
+    },
+    
+    // Terminal control
     clear: () => term.clear(),
     reset: () => term.reset(),
     focus: () => term.focus(),
-    fit: () => fitAddon.fit(),
+    fit: () => {
+        fitAddon.fit();
+        sendResize();
+    },
+    
+    // Get terminal dimensions
     getSize: () => ({ cols: term.cols, rows: term.rows }),
 };
 
-// Start connection
-connect();
+// Signal ready to Go
+postMessage({ type: 'ready', cols: term.cols, rows: term.rows });
 
 // Focus terminal
 term.focus();
 
-console.log('cbterm initialized');
+console.log('cbterm initialized (native bridge)');
