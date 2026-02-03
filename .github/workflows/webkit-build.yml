@@ -16,6 +16,10 @@ env:
   # (main branch requires Swift 6.0 / Xcode 16+)
   WEBKIT_REF: ${{ github.event.inputs.webkit_ref || 'releases/Apple/Safari-17.5-macOS-14.5' }}
 
+# Required for creating releases
+permissions:
+  contents: write
+
 jobs:
   build-macos-arm64:
     runs-on: macos-14
