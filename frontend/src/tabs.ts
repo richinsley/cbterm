@@ -748,6 +748,17 @@ export class TabManager {
         }
     }
     
+    // Close pane by terminal ID (called when shell exits)
+    closePaneByTerminal(terminalId: string): void {
+        for (const tab of this.tabs.values()) {
+            const pane = this.findPaneByTerminalId(tab.rootPane, terminalId);
+            if (pane) {
+                this.closePane(pane.id);
+                return;
+            }
+        }
+    }
+    
     // Navigate between panes
     private navigatePane(direction: 'left' | 'right' | 'up' | 'down'): void {
         if (!this.activeTabId || !this.activePaneId) return;

@@ -268,10 +268,16 @@ func (tw *TerminalWindow) handleMessage(msg string) {
 						remaining := len(tw.terminals)
 						tw.mu.Unlock()
 						
-						// Close window when last terminal exits
 						if remaining == 0 {
+							// Close window when last terminal exits
 							app.platform.Invoke(func() {
 								tw.window.Close()
+							})
+						} else {
+							// Tell frontend to close this pane
+							app.platform.Invoke(func() {
+								js := fmt.Sprintf("window.cbterm.closePaneByTerminal && window.cbterm.closePaneByTerminal('%s')", tid)
+								tw.window.GetWebView().EvalAsync(js)
 							})
 						}
 					} else {

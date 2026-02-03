@@ -57,6 +57,7 @@ resizeObserver.observe(container);
     splitVertical: () => tabManager.splitPane('vertical'),
     closePane: (paneId: string) => tabManager.closePane(paneId),
     closeActivePane: () => tabManager.closeActivePane(),
+    closePaneByTerminal: (terminalId: string) => tabManager.closePaneByTerminal(terminalId),
     prevTab: () => tabManager.navigateTab(-1),
     nextTab: () => tabManager.navigateTab(1),
     
