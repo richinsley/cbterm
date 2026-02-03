@@ -35,18 +35,25 @@ Project context for AI agents working on this codebase.
 - Working demo app with test HTML page
 - Message passing verified working
 
-### 2026-02-03: MVP Terminal
+### 2026-02-03: MVP Terminal — COMPLETE ✅
 - **frontend/**: xterm.js terminal UI
   - TypeScript + Vite build
   - WebGL renderer with canvas fallback
-  - WebSocket connection to backend
+  - Native bridge via WKWebView messageHandlers (no WebSocket!)
   - Resize handling
-- **pkg/terminal/**: PTY and WebSocket server
-  - `pty.go`: PTY wrapper using github.com/creack/pty
-  - `server.go`: WebSocket server bridging frontend ↔ PTY
-- **Working end-to-end terminal!**
-  - Type commands, see output
-  - Proper terminal emulation via xterm.js
+- **pkg/terminal/terminal.go**: Clean PTY wrapper
+  - Callback-based I/O (OnOutput func)
+  - Base64 encoding for safe binary transport
+  - Proper UTF-8 handling via Uint8Array
+- **Native Bridge Architecture**
+  - Input: JS `postMessage()` → Go → PTY
+  - Output: PTY → Go → `EvalAsync()` → xterm.js
+  - No WebSocket, no HTTP server for terminal I/O
+  - Direct IPC through WKWebView
+- **Fully functional terminal!**
+  - Shell works, commands execute
+  - TUI apps render correctly (tested with SSH + remote TUIs)
+  - UTF-8/Unicode (Powerline fonts, Nerd Fonts) working
   - Window resize propagates to PTY
 
 ---
@@ -151,4 +158,4 @@ webkit/              # WebKit patches and build artifacts
 
 ---
 
-*Last updated: 2026-02-03*
+*Last updated: 2026-02-03 (MVP complete!)*
