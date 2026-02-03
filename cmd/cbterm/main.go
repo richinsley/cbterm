@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/calobozan/cbterm"
 	"github.com/calobozan/cbterm/pkg/control"
 	"github.com/calobozan/cbterm/pkg/extensions"
 	"github.com/calobozan/cbterm/pkg/platform/darwin"
@@ -345,34 +347,17 @@ func (tw *TerminalWindow) handleMessage(msg string) {
 // and allows full ES module support, fetch(), etc.
 //
 // URL structure:
-//   cbterm://app/           → main frontend (index.html, assets)
-//   cbterm://extensions/    → user extensions (future)
-//   cbterm://themes/        → custom themes (future)
+//   cbterm://app/           → main frontend (embedded in binary)
+//   cbterm://extensions/    → user extensions (~/.config/cbterm/extensions/)
+//   cbterm://themes/        → custom themes (~/.config/cbterm/themes/)
 func registerFrontendScheme() (string, error) {
-	var distPath string
-
-	// Try relative to executable
-	if exe, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(exe), "..", "frontend", "dist")
-		if _, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil {
-			distPath = candidate
-		}
+	// Get the embedded frontend filesystem, rooted at frontend/dist
+	frontendFS, err := fs.Sub(cbterm.FrontendAssets, "frontend/dist")
+	if err != nil {
+		return "", fmt.Errorf("failed to access embedded frontend: %w", err)
 	}
 
-	// Try relative to current directory
-	if distPath == "" {
-		cwd, _ := os.Getwd()
-		candidate := filepath.Join(cwd, "frontend", "dist")
-		if _, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil {
-			distPath = candidate
-		}
-	}
-
-	if distPath == "" {
-		return "", fmt.Errorf("frontend not found (run 'cd frontend && npm run build')")
-	}
-
-	log.Printf("Frontend dir: %s", distPath)
+	log.Printf("Frontend: embedded")
 
 	// Register the cbterm:// scheme handler
 	darwin.RegisterScheme("cbterm", func(url string) ([]byte, string) {
@@ -389,20 +374,18 @@ func registerFrontendScheme() (string, error) {
 
 		switch namespace {
 		case "app":
-			// Serve from frontend dist
+			// Serve from embedded frontend
 			if resourcePath == "" {
 				resourcePath = "index.html"
 			}
-			filePath := filepath.Join(distPath, resourcePath)
 
-			// Security: prevent directory traversal
-			absPath, err := filepath.Abs(filePath)
-			if err != nil || !strings.HasPrefix(absPath, distPath) {
+			// Security: prevent directory traversal (no .. allowed)
+			if strings.Contains(resourcePath, "..") {
 				log.Printf("Blocked path traversal attempt: %s", path)
 				return nil, ""
 			}
 
-			data, err := os.ReadFile(filePath)
+			data, err := fs.ReadFile(frontendFS, resourcePath)
 			if err != nil {
 				if app != nil && app.debug {
 					log.Printf("404: %s", resourcePath)
@@ -411,9 +394,9 @@ func registerFrontendScheme() (string, error) {
 			}
 
 			if app != nil && app.debug {
-				log.Printf("200: %s (%d bytes, %s)", resourcePath, len(data), darwin.MimeTypeForPath(filePath))
+				log.Printf("200: %s (%d bytes, %s)", resourcePath, len(data), darwin.MimeTypeForPath(resourcePath))
 			}
-			return data, darwin.MimeTypeForPath(filePath)
+			return data, darwin.MimeTypeForPath(resourcePath)
 
 		case "extensions":
 			// Load from user extensions directory
