@@ -105,8 +105,14 @@ term.onResize(({ cols, rows }) => {
     // Write base64-encoded data to terminal
     write: (base64Data: string) => {
         try {
-            const data = atob(base64Data);
-            term.write(data);
+            // Decode base64 to binary string, then to Uint8Array
+            // This preserves UTF-8 byte sequences correctly
+            const binary = atob(base64Data);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            term.write(bytes);
         } catch (e) {
             console.error('Failed to decode terminal data:', e);
         }
