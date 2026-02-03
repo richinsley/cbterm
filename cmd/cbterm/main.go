@@ -7,12 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
+	"github.com/calobozan/cbterm/pkg/control"
+	"github.com/calobozan/cbterm/pkg/extensions"
 	"github.com/calobozan/cbterm/pkg/platform/darwin"
 	"github.com/calobozan/cbterm/pkg/terminal"
 )
@@ -25,19 +26,25 @@ var (
 // App holds global application state
 type App struct {
 	platform    *darwin.Platform
+	extensions  *extensions.Manager
+	controller  *control.Controller
 	shell       string
 	debug       bool
+	controlMode bool
 	frontendURL string
 
 	mu      sync.Mutex
 	windows map[*darwin.Window]*TerminalWindow
+	
+	// For control mode - track the active window
+	activeWindow *TerminalWindow
 }
 
 // TerminalWindow holds per-window state
 type TerminalWindow struct {
-	window   *darwin.Window
-	terminal *terminal.Terminal
-	mu       sync.Mutex
+	window    *darwin.Window
+	terminals map[string]*terminal.Terminal
+	mu        sync.Mutex
 }
 
 var app *App
@@ -45,12 +52,20 @@ var app *App
 func main() {
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug mode (developer tools)")
+	controlMode := flag.Bool("control", false, "Enable control mode (JSON commands via stdin)")
 	shell := flag.String("shell", "", "Shell to run (default: $SHELL or /bin/zsh)")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("cbterm %s (%s)\n", version, commit)
 		os.Exit(0)
+	}
+
+	// Register custom URI scheme for frontend assets
+	// Must be done BEFORE creating the platform/windows
+	frontendURL, err := registerFrontendScheme()
+	if err != nil {
+		log.Fatalf("Failed to register frontend scheme: %v", err)
 	}
 
 	// Initialize platform
@@ -61,21 +76,33 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize platform: %v", err)
 	}
-
-	// Serve frontend (shared across all windows)
-	frontendURL, err := serveFrontend()
-	if err != nil {
-		log.Fatalf("Failed to serve frontend: %v", err)
-	}
 	log.Printf("Frontend: %s", frontendURL)
+
+	// Discover extensions
+	extManager := extensions.NewManager(extensions.DefaultBasePath())
+	if err := extManager.Discover(); err != nil {
+		log.Printf("Warning: failed to discover extensions: %v", err)
+	}
+	for _, ext := range extManager.ListEnabled() {
+		log.Printf("Extension: %s v%s", ext.Manifest.Name, ext.Manifest.Version)
+	}
 
 	// Create app
 	app = &App{
 		platform:    p,
+		extensions:  extManager,
 		shell:       *shell,
 		debug:       *debug,
+		controlMode: *controlMode,
 		frontendURL: frontendURL,
 		windows:     make(map[*darwin.Window]*TerminalWindow),
+	}
+	
+	// Start control mode if enabled
+	if *controlMode {
+		app.controller = control.New(app)
+		app.controller.Start()
+		log.Println("Control mode enabled - accepting JSON commands on stdin")
 	}
 
 	// Build app menu
@@ -105,12 +132,14 @@ func (a *App) NewWindow() error {
 	}
 
 	tw := &TerminalWindow{
-		window: win,
+		window:    win,
+		terminals: make(map[string]*terminal.Terminal),
 	}
 
 	// Register window
 	a.mu.Lock()
 	a.windows[win] = tw
+	a.activeWindow = tw
 	a.mu.Unlock()
 
 	// Handle messages from JavaScript
@@ -121,9 +150,11 @@ func (a *App) NewWindow() error {
 	// Handle window close
 	win.OnClose(func() bool {
 		tw.mu.Lock()
-		if tw.terminal != nil {
-			tw.terminal.Close()
+		for id, term := range tw.terminals {
+			term.Close()
+			log.Printf("Closed terminal %s", id)
 		}
+		tw.terminals = nil
 		tw.mu.Unlock()
 
 		a.mu.Lock()
@@ -151,10 +182,16 @@ func (a *App) NewWindow() error {
 // handleMessage processes messages from the frontend
 func (tw *TerminalWindow) handleMessage(msg string) {
 	var m struct {
-		Type string `json:"type"`
-		Data string `json:"data"`
-		Cols int    `json:"cols"`
-		Rows int    `json:"rows"`
+		Type       string `json:"type"`
+		Data       string `json:"data"`
+		Cols       int    `json:"cols"`
+		Rows       int    `json:"rows"`
+		Count      int    `json:"count"`
+		Error      string `json:"error"`
+		Msg        string `json:"msg"`
+		Name       string `json:"name"`
+		Version    string `json:"version"`
+		TerminalId string `json:"terminalId"`
 	}
 	if err := json.Unmarshal([]byte(msg), &m); err != nil {
 		log.Printf("Invalid message: %s", msg)
@@ -162,56 +199,132 @@ func (tw *TerminalWindow) handleMessage(msg string) {
 	}
 
 	switch m.Type {
-	case "ready":
-		log.Printf("Frontend ready, terminal size: %dx%d", m.Cols, m.Rows)
+	case "debug":
+		log.Printf("[JS] %s", m.Msg)
+
+	case "extension_loaded":
+		log.Printf("Loaded extension: %s v%s", m.Name, m.Version)
+
+	case "extension_error":
+		log.Printf("Extension %s failed: %s", m.Name, m.Error)
+
+	case "extensions_loaded":
+		log.Printf("Extensions loaded: %d", m.Count)
+
+	case "extensions_error":
+		log.Printf("Extensions error: %s", m.Error)
+
+	case "terminal_mounted":
+		log.Printf("Terminal %s mounted in frontend", m.TerminalId)
+
+	case "ready", "new_terminal":
+		// Create a new terminal for this terminal ID
+		terminalId := m.TerminalId
+		if terminalId == "" {
+			terminalId = "term-1" // backwards compat
+		}
+		
+		log.Printf("Creating terminal %s (%dx%d)", terminalId, m.Cols, m.Rows)
+		
 		tw.mu.Lock()
-		if tw.terminal == nil {
-			var err error
-			tw.terminal, err = terminal.New(terminal.Options{
+		if tw.terminals == nil {
+			tw.terminals = make(map[string]*terminal.Terminal)
+		}
+		
+		if tw.terminals[terminalId] == nil {
+			tid := terminalId // capture for closure
+			term, err := terminal.New(terminal.Options{
 				Shell: app.shell,
 				Cols:  uint16(m.Cols),
 				Rows:  uint16(m.Rows),
 				OnOutput: func(data string) {
-					js := fmt.Sprintf("window.cbterm.write('%s')", data)
+					// Send output to specific terminal
+					// Use template literal to avoid escaping issues with base64
+					if app.debug {
+						log.Printf("Terminal %s output: %d bytes", tid, len(data))
+					}
+					js := fmt.Sprintf("window.cbterm.write(`%s`, `%s`)", tid, data)
 					tw.window.GetWebView().EvalAsync(js)
+					
+					// Emit event for control mode
+					if app.controller != nil {
+						app.controller.EmitTerminalOutput(tid, data)
+					}
 				},
 				OnExit: func(exitCode int) {
-					log.Printf("Shell exited with code %d", exitCode)
-					// Close window when shell exits
-					// Use Invoke to run on main thread
-					app.platform.Invoke(func() {
-						tw.window.Close()
-					})
+					log.Printf("Terminal %s exited with code %d", terminalId, exitCode)
+					tw.mu.Lock()
+					delete(tw.terminals, terminalId)
+					remaining := len(tw.terminals)
+					tw.mu.Unlock()
+					
+					// Close window when last terminal exits
+					if remaining == 0 {
+						app.platform.Invoke(func() {
+							tw.window.Close()
+						})
+					}
 				},
 			})
 			if err != nil {
-				log.Printf("Failed to create terminal: %v", err)
+				log.Printf("Failed to create terminal %s: %v", terminalId, err)
+			} else {
+				tw.terminals[terminalId] = term
+				// Emit event for control mode
+				if app.controller != nil {
+					app.controller.Emit(control.EventTerminalCreated, map[string]interface{}{
+						"terminal_id": terminalId,
+						"cols":        m.Cols,
+						"rows":        m.Rows,
+					})
+				}
 			}
 		}
 		tw.mu.Unlock()
 
-	case "input":
+	case "close_terminal":
+		terminalId := m.TerminalId
 		tw.mu.Lock()
-		if tw.terminal != nil {
-			tw.terminal.Write(m.Data)
+		if term := tw.terminals[terminalId]; term != nil {
+			term.Close()
+			delete(tw.terminals, terminalId)
+			log.Printf("Closed terminal %s", terminalId)
+		}
+		tw.mu.Unlock()
+
+	case "input":
+		terminalId := m.TerminalId
+		if terminalId == "" {
+			terminalId = "term-1"
+		}
+		tw.mu.Lock()
+		if term := tw.terminals[terminalId]; term != nil {
+			term.Write(m.Data)
 		}
 		tw.mu.Unlock()
 
 	case "resize":
+		terminalId := m.TerminalId
+		if terminalId == "" {
+			terminalId = "term-1"
+		}
 		tw.mu.Lock()
-		if tw.terminal != nil && m.Cols > 0 && m.Rows > 0 {
-			tw.terminal.Resize(uint16(m.Rows), uint16(m.Cols))
+		if term := tw.terminals[terminalId]; term != nil && m.Cols > 0 && m.Rows > 0 {
+			term.Resize(uint16(m.Rows), uint16(m.Cols))
 		}
 		tw.mu.Unlock()
 	}
 }
 
-// serveFrontend serves the frontend on a localhost-only HTTP server.
-// We use HTTP instead of file:// URLs because WKWebView's security model
-// restricts message handlers and local file access with file:// URLs.
-// The server only binds to 127.0.0.1 so it's not accessible from the network.
-// TODO: Embed frontend in binary for distribution builds.
-func serveFrontend() (string, error) {
+// registerFrontendScheme sets up the "cbterm://" scheme handler for serving
+// frontend assets. This bypasses browser security restrictions on file:// URLs
+// and allows full ES module support, fetch(), etc.
+//
+// URL structure:
+//   cbterm://app/           → main frontend (index.html, assets)
+//   cbterm://extensions/    → user extensions (future)
+//   cbterm://themes/        → custom themes (future)
+func registerFrontendScheme() (string, error) {
 	var distPath string
 
 	// Try relative to executable
@@ -235,17 +348,163 @@ func serveFrontend() (string, error) {
 		return "", fmt.Errorf("frontend not found (run 'cd frontend && npm run build')")
 	}
 
-	// Serve on localhost (127.0.0.1 only - not exposed to network)
-	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir(distPath)))
+	log.Printf("Frontend dir: %s", distPath)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
+	// Register the cbterm:// scheme handler
+	darwin.RegisterScheme("cbterm", func(url string) ([]byte, string) {
+		// Parse: cbterm://app/path/to/file.js
+		path := strings.TrimPrefix(url, "cbterm://")
 
-	go http.Serve(listener, mux)
-	return fmt.Sprintf("http://%s", listener.Addr()), nil
+		// Route based on first path segment
+		parts := strings.SplitN(path, "/", 2)
+		namespace := parts[0]
+		resourcePath := ""
+		if len(parts) > 1 {
+			resourcePath = parts[1]
+		}
+
+		switch namespace {
+		case "app":
+			// Serve from frontend dist
+			if resourcePath == "" {
+				resourcePath = "index.html"
+			}
+			filePath := filepath.Join(distPath, resourcePath)
+
+			// Security: prevent directory traversal
+			absPath, err := filepath.Abs(filePath)
+			if err != nil || !strings.HasPrefix(absPath, distPath) {
+				log.Printf("Blocked path traversal attempt: %s", path)
+				return nil, ""
+			}
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				if app != nil && app.debug {
+					log.Printf("404: %s", resourcePath)
+				}
+				return nil, ""
+			}
+
+			if app != nil && app.debug {
+				log.Printf("200: %s (%d bytes, %s)", resourcePath, len(data), darwin.MimeTypeForPath(filePath))
+			}
+			return data, darwin.MimeTypeForPath(filePath)
+
+		case "extensions":
+			// Load from user extensions directory
+			// ~/.config/cbterm/extensions/{name}/...
+			home, _ := os.UserHomeDir()
+			extBase := filepath.Join(home, ".config", "cbterm", "extensions")
+
+			filePath := filepath.Join(extBase, resourcePath)
+
+			// Security: prevent directory traversal
+			absPath, err := filepath.Abs(filePath)
+			if err != nil || !strings.HasPrefix(absPath, extBase) {
+				log.Printf("Blocked extension path traversal: %s", path)
+				return nil, ""
+			}
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				if app != nil && app.debug {
+					log.Printf("Extension 404: %s", resourcePath)
+				}
+				return nil, ""
+			}
+
+			if app != nil && app.debug {
+				log.Printf("Extension 200: %s (%d bytes)", resourcePath, len(data))
+			}
+			return data, darwin.MimeTypeForPath(filePath)
+
+		case "themes":
+			// Load from user themes directory
+			// ~/.config/cbterm/themes/{name}/...
+			home, _ := os.UserHomeDir()
+			themeBase := filepath.Join(home, ".config", "cbterm", "themes")
+
+			filePath := filepath.Join(themeBase, resourcePath)
+
+			// Security: prevent directory traversal
+			absPath, err := filepath.Abs(filePath)
+			if err != nil || !strings.HasPrefix(absPath, themeBase) {
+				log.Printf("Blocked theme path traversal: %s", path)
+				return nil, ""
+			}
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				if app != nil && app.debug {
+					log.Printf("Theme 404: %s", resourcePath)
+				}
+				return nil, ""
+			}
+
+			if app != nil && app.debug {
+				log.Printf("Theme 200: %s (%d bytes)", resourcePath, len(data))
+			}
+			return data, darwin.MimeTypeForPath(filePath)
+
+		case "api":
+			// Virtual API endpoints - serve JavaScript API modules
+			// These provide the extension API surface
+			switch resourcePath {
+			case "extensions/list.json":
+				// Return list of enabled extensions
+				if app != nil && app.extensions != nil {
+					data, err := app.extensions.ToJSON()
+					if err != nil {
+						log.Printf("Failed to serialize extensions: %v", err)
+						return []byte("[]"), "application/json"
+					}
+					if app.debug {
+						log.Printf("API: extensions/list.json -> %s", string(data))
+					}
+					return data, "application/json"
+				}
+				return []byte("[]"), "application/json"
+
+			case "terminal.js":
+				// Terminal API module
+				return []byte(`
+					// Terminal API
+					export const Terminal = {
+						write(data) {
+							window.webkit.messageHandlers.cbterm.postMessage(
+								JSON.stringify({type: 'input', data: data})
+							);
+						},
+						onData(callback) {
+							window.cbterm._onDataCallbacks = window.cbterm._onDataCallbacks || [];
+							window.cbterm._onDataCallbacks.push(callback);
+						}
+					};
+				`), "application/javascript"
+
+			case "config.js":
+				// Config API module (placeholder)
+				return []byte(`
+					// Config API
+					export const Config = {
+						async get(key) { return null; },
+						async set(key, value) { }
+					};
+				`), "application/javascript"
+
+			default:
+				log.Printf("Unknown API endpoint: %s", resourcePath)
+				return nil, ""
+			}
+
+		default:
+			log.Printf("Unknown cbterm namespace: %s", namespace)
+			return nil, ""
+		}
+	})
+
+	return "cbterm://app/", nil
 }
 
 func buildAppMenu() {
@@ -283,16 +542,68 @@ func buildAppMenu() {
 		Label:    "New Tab",
 		Shortcut: "Cmd+T",
 		Enabled:  true,
-		// TODO: Implement tabs
+		Action: func() {
+			app.evalActiveWindow(`window.cbterm.createTab()`)
+		},
 	})
 	shellMenu.AddSeparator()
 	shellMenu.Add(darwin.MenuItem{
-		Label:    "Close",
+		Label:    "Split Vertically",
+		Shortcut: "Cmd+D",
+		Enabled:  true,
+		Action: func() {
+			app.evalActiveWindow(`window.cbterm.splitVertical()`)
+		},
+	})
+	shellMenu.Add(darwin.MenuItem{
+		Label:    "Split Horizontally",
+		Shortcut: "Cmd+Shift+D",
+		Enabled:  true,
+		Action: func() {
+			app.evalActiveWindow(`window.cbterm.splitHorizontal()`)
+		},
+	})
+	shellMenu.AddSeparator()
+	shellMenu.Add(darwin.MenuItem{
+		Label:    "Close Pane",
 		Shortcut: "Cmd+W",
 		Enabled:  true,
-		// Close is handled by the window itself
+		Action: func() {
+			app.evalActiveWindow(`window.cbterm.closeActivePane && window.cbterm.closeActivePane()`)
+		},
 	})
 	menuBar.Add(darwin.MenuItem{Label: "Shell", Submenu: shellMenu})
+	
+	// View menu
+	viewMenu := p.NewMenu()
+	viewMenu.Add(darwin.MenuItem{
+		Label:    "Previous Tab",
+		Shortcut: "Cmd+[",
+		Enabled:  true,
+		Action: func() {
+			app.evalActiveWindow(`window.cbterm.prevTab && window.cbterm.prevTab()`)
+		},
+	})
+	viewMenu.Add(darwin.MenuItem{
+		Label:    "Next Tab",
+		Shortcut: "Cmd+]",
+		Enabled:  true,
+		Action: func() {
+			app.evalActiveWindow(`window.cbterm.nextTab && window.cbterm.nextTab()`)
+		},
+	})
+	viewMenu.AddSeparator()
+	viewMenu.Add(darwin.MenuItem{
+		Label:    "Reload",
+		Shortcut: "Cmd+R",
+		Enabled:  true,
+		Action: func() {
+			if app.activeWindow != nil {
+				app.activeWindow.window.GetWebView().Reload()
+			}
+		},
+	})
+	menuBar.Add(darwin.MenuItem{Label: "View", Submenu: viewMenu})
 
 	// Edit menu
 	editMenu := p.NewMenu()
@@ -305,16 +616,6 @@ func buildAppMenu() {
 	editMenu.Add(darwin.MenuItem{Label: "Select All", Shortcut: "Cmd+A", Enabled: true})
 	menuBar.Add(darwin.MenuItem{Label: "Edit", Submenu: editMenu})
 
-	// View menu
-	viewMenu := p.NewMenu()
-	viewMenu.Add(darwin.MenuItem{
-		Label:    "Reload",
-		Shortcut: "Cmd+R",
-		Enabled:  true,
-		// TODO: Reload focused window
-	})
-	menuBar.Add(darwin.MenuItem{Label: "View", Submenu: viewMenu})
-
 	// Window menu
 	windowMenu := p.NewMenu()
 	windowMenu.Add(darwin.MenuItem{Label: "Minimize", Shortcut: "Cmd+M", Enabled: true})
@@ -322,4 +623,198 @@ func buildAppMenu() {
 	menuBar.Add(darwin.MenuItem{Label: "Window", Submenu: windowMenu})
 
 	p.SetAppMenu(menuBar)
+}
+
+// Helper to evaluate JS on the active window
+func (a *App) evalActiveWindow(js string) {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw != nil {
+		tw.window.GetWebView().EvalAsync(js)
+	}
+}
+
+// Control mode Handler interface implementation
+
+// NewTab creates a new tab in the active window.
+func (a *App) NewTab() (tabID string, terminalID string, err error) {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw == nil {
+		return "", "", fmt.Errorf("no active window")
+	}
+	
+	// Tell frontend to create a new tab
+	js := `(function() {
+		const tab = window.cbterm.createTab();
+		return JSON.stringify({tabId: tab.id, terminalId: tab.rootPane.terminal?.id || ''});
+	})()`
+	
+	result, err := tw.window.GetWebView().Eval(js)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create tab: %v", err)
+	}
+	
+	var resp struct {
+		TabID      string `json:"tabId"`
+		TerminalID string `json:"terminalId"`
+	}
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		return "", "", fmt.Errorf("failed to parse response: %v", err)
+	}
+	
+	return resp.TabID, resp.TerminalID, nil
+}
+
+// CloseTab closes a tab.
+func (a *App) CloseTab(tabID string) error {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw == nil {
+		return fmt.Errorf("no active window")
+	}
+	
+	js := fmt.Sprintf(`window.cbterm.closeTab && window.cbterm.closeTab('%s')`, tabID)
+	_, err := tw.window.GetWebView().Eval(js)
+	return err
+}
+
+// SplitPane splits the active pane.
+func (a *App) SplitPane(direction string) (newTerminalID string, err error) {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw == nil {
+		return "", fmt.Errorf("no active window")
+	}
+	
+	var js string
+	if direction == "horizontal" {
+		js = `(function() {
+			const pane = window.cbterm.splitHorizontal();
+			return pane?.terminal?.id || '';
+		})()`
+	} else {
+		js = `(function() {
+			const pane = window.cbterm.splitVertical();
+			return pane?.terminal?.id || '';
+		})()`
+	}
+	
+	result, err := tw.window.GetWebView().Eval(js)
+	if err != nil {
+		return "", fmt.Errorf("failed to split pane: %v", err)
+	}
+	
+	return strings.Trim(result, `"`), nil
+}
+
+// ClosePane closes a pane.
+func (a *App) ClosePane(terminalID string) error {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw == nil {
+		return fmt.Errorf("no active window")
+	}
+	
+	js := fmt.Sprintf(`window.cbterm.closePane && window.cbterm.closePane('%s')`, terminalID)
+	_, err := tw.window.GetWebView().Eval(js)
+	return err
+}
+
+// TypeText sends text to a terminal.
+func (a *App) TypeText(terminalID string, text string) error {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw == nil {
+		return fmt.Errorf("no active window")
+	}
+	
+	tw.mu.Lock()
+	term := tw.terminals[terminalID]
+	tw.mu.Unlock()
+	
+	if term == nil {
+		return fmt.Errorf("terminal not found: %s", terminalID)
+	}
+	
+	return term.WriteRaw([]byte(text))
+}
+
+// GetTerminalBuffer gets the visible buffer from a terminal.
+func (a *App) GetTerminalBuffer(terminalID string) (string, error) {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw == nil {
+		return "", fmt.Errorf("no active window")
+	}
+	
+	// Ask the frontend for the terminal's serialized content
+	js := fmt.Sprintf(`(function() {
+		// Find terminal by ID and serialize its buffer
+		// This requires the serialize addon which we have loaded
+		return ''; // TODO: implement buffer serialization
+	})()`)
+	
+	result, err := tw.window.GetWebView().Eval(js)
+	if err != nil {
+		return "", err
+	}
+	
+	return result, nil
+}
+
+// GetState returns the current app state.
+func (a *App) GetState() (interface{}, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	
+	state := map[string]interface{}{
+		"windows": len(a.windows),
+	}
+	
+	if a.activeWindow != nil {
+		a.activeWindow.mu.Lock()
+		terminals := make([]string, 0, len(a.activeWindow.terminals))
+		for id := range a.activeWindow.terminals {
+			terminals = append(terminals, id)
+		}
+		a.activeWindow.mu.Unlock()
+		state["terminals"] = terminals
+	}
+	
+	return state, nil
+}
+
+// Focus focuses the window.
+func (a *App) Focus() error {
+	a.mu.Lock()
+	tw := a.activeWindow
+	a.mu.Unlock()
+	
+	if tw == nil {
+		return fmt.Errorf("no active window")
+	}
+	
+	tw.window.Focus()
+	return nil
+}
+
+// Close closes the application.
+func (a *App) Close() error {
+	a.platform.Quit()
+	return nil
 }

@@ -10,6 +10,15 @@
 @property (nonatomic, assign) BOOL debug;
 @end
 
+// URI Scheme Handler - calls back to Go for content
+@interface CBTermSchemeHandler : NSObject <WKURLSchemeHandler>
+@property (nonatomic, copy) NSString *scheme;
+@end
+
+// Global scheme registry
+static NSMutableArray<NSString *> *gRegisteredSchemes = nil;
+static CBTermSchemeHandler *gSchemeHandler = nil;
+
 @interface CBTermWindowController : NSObject <NSWindowDelegate>
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) WKWebView *webView;
@@ -110,6 +119,13 @@ void cbterm_app_invoke(void* callback) {
         WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
         WKUserContentController *userContent = [[WKUserContentController alloc] init];
         config.userContentController = userContent;
+        
+        // Register custom URI scheme handlers
+        if (gRegisteredSchemes && gSchemeHandler) {
+            for (NSString *scheme in gRegisteredSchemes) {
+                [config setURLSchemeHandler:gSchemeHandler forURLScheme:scheme];
+            }
+        }
         
         // Enable developer tools in debug mode
         if (gDebug) {
@@ -408,6 +424,77 @@ void cbterm_webview_set_devtools(CBTermWebView wv, bool enabled) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [webView.configuration.preferences setValue:@(enabled) forKey:@"developerExtrasEnabled"];
     });
+}
+
+#pragma mark - URI Scheme Handler
+
+@implementation CBTermSchemeHandler
+
+- (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    NSURL *url = urlSchemeTask.request.URL;
+    NSString *urlString = [url absoluteString];
+    
+    char *data = NULL;
+    int length = 0;
+    char *mimeType = NULL;
+    
+    // Call Go to get the resource
+    goSchemeCallback((char *)[urlString UTF8String], &data, &length, &mimeType);
+    
+    if (data && length > 0) {
+        NSData *responseData = [NSData dataWithBytes:data length:length];
+        NSString *mime = mimeType ? [NSString stringWithUTF8String:mimeType] : @"application/octet-stream";
+        
+        // Use NSHTTPURLResponse for proper fetch() compatibility
+        NSDictionary *headers = @{
+            @"Content-Type": mime,
+            @"Content-Length": [NSString stringWithFormat:@"%d", length],
+            @"Access-Control-Allow-Origin": @"*"
+        };
+        
+        NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url
+                                                                  statusCode:200
+                                                                 HTTPVersion:@"HTTP/1.1"
+                                                                headerFields:headers];
+        
+        [urlSchemeTask didReceiveResponse:response];
+        [urlSchemeTask didReceiveData:responseData];
+        [urlSchemeTask didFinish];
+        
+        // Free memory allocated by Go
+        free(data);
+        if (mimeType) free(mimeType);
+    } else {
+        // Return 404 with proper HTTP response
+        NSDictionary *headers = @{
+            @"Content-Type": @"text/plain"
+        };
+        NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url
+                                                                  statusCode:404
+                                                                 HTTPVersion:@"HTTP/1.1"
+                                                                headerFields:headers];
+        [urlSchemeTask didReceiveResponse:response];
+        [urlSchemeTask didReceiveData:[@"Not Found" dataUsingEncoding:NSUTF8StringEncoding]];
+        [urlSchemeTask didFinish];
+    }
+}
+
+- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    // Request cancelled - nothing to clean up in our simple case
+}
+
+@end
+
+void cbterm_register_scheme(const char* scheme) {
+    @autoreleasepool {
+        if (!gRegisteredSchemes) {
+            gRegisteredSchemes = [[NSMutableArray alloc] init];
+            gSchemeHandler = [[CBTermSchemeHandler alloc] init];
+        }
+        
+        NSString *schemeStr = [NSString stringWithUTF8String:scheme];
+        [gRegisteredSchemes addObject:schemeStr];
+    }
 }
 
 #pragma mark - Menu Functions

@@ -38,6 +38,10 @@ void cbterm_window_set_close_callback(CBTermWindow w, void* callback);
 // WebView
 typedef void* CBTermWebView;
 
+// Register a custom URI scheme (must be called BEFORE creating windows)
+// The actual handler is implemented in Go via goSchemeCallback
+void cbterm_register_scheme(const char* scheme);
+
 void cbterm_webview_load_url(CBTermWebView wv, const char* url);
 void cbterm_webview_load_html(CBTermWebView wv, const char* html, const char* base_url);
 const char* cbterm_webview_eval(CBTermWebView wv, const char* js);

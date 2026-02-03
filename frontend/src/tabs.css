@@ -1,0 +1,269 @@
+/* Tab bar styles */
+.tab-bar {
+    display: flex;
+    background: #252526;
+    border-bottom: 1px solid #3c3c3c;
+    height: 35px;
+    user-select: none;
+    -webkit-app-region: drag;
+}
+
+.tab {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    background: #2d2d2d;
+    border-right: 1px solid #3c3c3c;
+    cursor: pointer;
+    min-width: 80px;
+    max-width: 200px;
+    -webkit-app-region: no-drag;
+}
+
+.tab:hover {
+    background: #383838;
+}
+
+.tab.active {
+    background: #1e1e1e;
+    border-bottom: 2px solid #007acc;
+}
+
+.tab-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: #ccc;
+}
+
+.tab.active .tab-title {
+    color: #fff;
+}
+
+.tab-close {
+    margin-left: 8px;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    border-radius: 3px;
+    font-size: 14px;
+    color: #999;
+}
+
+.tab-close:hover {
+    background: #5a5a5a;
+    color: #fff;
+}
+
+.tab.new-tab {
+    min-width: 35px;
+    max-width: 35px;
+    justify-content: center;
+    font-size: 18px;
+    color: #888;
+}
+
+.tab.new-tab:hover {
+    color: #fff;
+}
+
+/* Tab content area */
+.tab-content {
+    flex: 1;
+    overflow: hidden;
+    background: #1e1e1e;
+}
+
+/* Terminal pane */
+.terminal-pane {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Pane title bar */
+.pane-titlebar {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    min-height: 22px;
+    background: #2d2d2d;
+    border-bottom: 1px solid #3c3c3c;
+    padding: 0 4px;
+    user-select: none;
+    font-size: 11px;
+    color: #888;
+}
+
+.terminal-pane.focused .pane-titlebar {
+    background: #323232;
+    color: #ccc;
+}
+
+.pane-titlebar-left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pane-titlebar-center {
+    flex: 1;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 8px;
+}
+
+.pane-titlebar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pane-btn {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0.6;
+    font-size: 12px;
+}
+
+.pane-btn:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.pane-btn-close:hover {
+    background: #e81123;
+    color: white;
+    opacity: 1;
+}
+
+/* Pane terminal container */
+.pane-terminal {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Focus/unfocus states */
+.terminal-pane:not(.focused) .pane-terminal {
+    opacity: 0.5;
+}
+
+.terminal-pane:not(.focused)::after {
+    content: '';
+    position: absolute;
+    top: 22px; /* below titlebar */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.15);
+    pointer-events: none;
+    z-index: 5;
+}
+
+.terminal-pane.focused .pane-titlebar {
+    border-bottom-color: #007acc;
+}
+
+/* Context menu */
+.pane-context-menu {
+    position: fixed;
+    background: #252526;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    padding: 4px 0;
+    min-width: 150px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    z-index: 1000;
+    font-size: 12px;
+}
+
+.pane-context-menu-item {
+    padding: 6px 12px;
+    cursor: pointer;
+    color: #ccc;
+}
+
+.pane-context-menu-item:hover {
+    background: #094771;
+    color: white;
+}
+
+.pane-context-menu-separator {
+    height: 1px;
+    background: #3c3c3c;
+    margin: 4px 0;
+}
+
+/* Split pane container */
+.split-pane {
+    display: flex;
+    width: 100%;
+    height: 100%;
+}
+
+.split-pane.horizontal {
+    flex-direction: row;
+}
+
+.split-pane.vertical {
+    flex-direction: column;
+}
+
+.split-pane > .terminal-pane,
+.split-pane > .split-pane {
+    flex: 1;
+    min-width: 100px;
+    min-height: 50px;
+}
+
+/* Pane divider */
+.pane-divider {
+    flex-shrink: 0;
+    background: #3c3c3c;
+    transition: background 0.1s;
+}
+
+.split-pane.horizontal > .pane-divider {
+    width: 4px;
+    cursor: col-resize;
+}
+
+.split-pane.vertical > .pane-divider {
+    height: 4px;
+    cursor: row-resize;
+}
+
+.pane-divider:hover {
+    background: #007acc;
+}
+
+/* Make xterm fill the pane terminal container */
+.pane-terminal {
+    position: relative;
+}
+
+.pane-terminal .xterm {
+    height: 100%;
+}
+
+.pane-terminal .xterm-viewport {
+    overflow-y: auto !important;
+}
+
+.pane-terminal .xterm-screen {
+    height: 100%;
+}
