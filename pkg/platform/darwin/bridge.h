@@ -41,6 +41,7 @@ typedef void* CBTermWebView;
 void cbterm_webview_load_url(CBTermWebView wv, const char* url);
 void cbterm_webview_load_html(CBTermWebView wv, const char* html, const char* base_url);
 const char* cbterm_webview_eval(CBTermWebView wv, const char* js);
+void cbterm_webview_eval_async(CBTermWebView wv, const char* js);
 void cbterm_webview_free_string(const char* str);
 void cbterm_webview_bind(CBTermWebView wv, const char* name, void* callback);
 void cbterm_webview_set_message_handler(CBTermWebView wv, void* callback);

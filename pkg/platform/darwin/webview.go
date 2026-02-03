@@ -56,6 +56,14 @@ func (wv *WebView) Eval(js string) (string, error) {
 	return r, nil
 }
 
+// EvalAsync executes JavaScript without waiting for a result.
+// Use this for high-frequency operations like terminal output.
+func (wv *WebView) EvalAsync(js string) {
+	j := C.CString(js)
+	defer C.free(unsafe.Pointer(j))
+	C.cbterm_webview_eval_async(wv.ptr, j)
+}
+
 // Bind exposes a Go function to JavaScript.
 func (wv *WebView) Bind(name string, fn interface{}) error {
 	n := C.CString(name)

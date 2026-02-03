@@ -82,12 +82,9 @@ func main() {
 					Cols:  uint16(m.Cols),
 					Rows:  uint16(m.Rows),
 					OnOutput: func(data string) {
-						// Write to terminal via native bridge
-						// Escape for JavaScript string
-						p.Invoke(func() {
-							js := fmt.Sprintf("window.cbterm.write('%s')", data)
-							win.GetWebView().Eval(js)
-						})
+						// Write to terminal via native bridge (async, non-blocking)
+						js := fmt.Sprintf("window.cbterm.write('%s')", data)
+						win.GetWebView().EvalAsync(js)
 					},
 				})
 				if err != nil {

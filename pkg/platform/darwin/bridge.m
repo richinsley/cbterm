@@ -340,6 +340,15 @@ const char* cbterm_webview_eval(CBTermWebView wv, const char* js) {
     return strdup([result UTF8String]);
 }
 
+void cbterm_webview_eval_async(CBTermWebView wv, const char* js) {
+    WKWebView *webView = (__bridge WKWebView *)wv;
+    NSString *jsString = [NSString stringWithUTF8String:js];
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [webView evaluateJavaScript:jsString completionHandler:nil];
+    });
+}
+
 void cbterm_webview_free_string(const char* str) {
     free((void *)str);
 }
