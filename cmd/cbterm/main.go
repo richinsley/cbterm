@@ -141,7 +141,7 @@ func (a *App) NewWindow() error {
 		return true
 	})
 
-	// Load frontend and show
+	// Load frontend
 	win.GetWebView().LoadURL(a.frontendURL)
 	win.Show()
 
@@ -206,20 +206,27 @@ func (tw *TerminalWindow) handleMessage(msg string) {
 	}
 }
 
+// serveFrontend serves the frontend on a localhost-only HTTP server.
+// We use HTTP instead of file:// URLs because WKWebView's security model
+// restricts message handlers and local file access with file:// URLs.
+// The server only binds to 127.0.0.1 so it's not accessible from the network.
+// TODO: Embed frontend in binary for distribution builds.
 func serveFrontend() (string, error) {
 	var distPath string
 
+	// Try relative to executable
 	if exe, err := os.Executable(); err == nil {
 		candidate := filepath.Join(filepath.Dir(exe), "..", "frontend", "dist")
-		if _, err := os.Stat(candidate); err == nil {
+		if _, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil {
 			distPath = candidate
 		}
 	}
 
+	// Try relative to current directory
 	if distPath == "" {
 		cwd, _ := os.Getwd()
 		candidate := filepath.Join(cwd, "frontend", "dist")
-		if _, err := os.Stat(candidate); err == nil {
+		if _, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil {
 			distPath = candidate
 		}
 	}
@@ -228,6 +235,7 @@ func serveFrontend() (string, error) {
 		return "", fmt.Errorf("frontend not found (run 'cd frontend && npm run build')")
 	}
 
+	// Serve on localhost (127.0.0.1 only - not exposed to network)
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir(distPath)))
 
@@ -237,7 +245,7 @@ func serveFrontend() (string, error) {
 	}
 
 	go http.Serve(listener, mux)
-	return fmt.Sprintf("http://%s", listener.Addr().String()), nil
+	return fmt.Sprintf("http://%s", listener.Addr()), nil
 }
 
 func buildAppMenu() {

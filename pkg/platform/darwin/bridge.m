@@ -286,11 +286,14 @@ void cbterm_webview_load_url(CBTermWebView wv, const char* url) {
     WKWebView *webView = (__bridge WKWebView *)wv;
     NSString *urlString = [NSString stringWithUTF8String:url];
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSURL *nsurl = [NSURL URLWithString:urlString];
         if ([urlString hasPrefix:@"file://"]) {
-            nsurl = [NSURL fileURLWithPath:[urlString substringFromIndex:7]];
-            [webView loadFileURL:nsurl allowingReadAccessToURL:nsurl.URLByDeletingLastPathComponent];
+            NSString *path = [urlString substringFromIndex:7];
+            NSURL *fileURL = [NSURL fileURLWithPath:path];
+            // Grant read access to the directory containing index.html (for assets/)
+            NSURL *dirURL = [fileURL URLByDeletingLastPathComponent];
+            [webView loadFileURL:fileURL allowingReadAccessToURL:dirURL];
         } else {
+            NSURL *nsurl = [NSURL URLWithString:urlString];
             [webView loadRequest:[NSURLRequest requestWithURL:nsurl]];
         }
     });
