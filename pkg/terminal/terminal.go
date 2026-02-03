@@ -188,7 +188,6 @@ func (t *Terminal) Resize(rows, cols uint16) error {
 }
 
 // Close terminates the terminal.
-// It closes the PTY file (causing the shell to exit) and waits for cleanup.
 func (t *Terminal) Close() error {
 	t.mu.Lock()
 	if t.closed {
@@ -198,12 +197,15 @@ func (t *Terminal) Close() error {
 	t.closed = true
 	t.mu.Unlock()
 
-	// Close the PTY file - this causes the shell to get SIGHUP and exit
-	err := t.file.Close()
+	// Kill the process directly - don't rely on PTY close
+	if t.cmd.Process != nil {
+		t.cmd.Process.Kill()
+	}
 	
-	// Wait for waitForExit goroutine to complete
-	// This ensures cmd.Wait() finishes before we return
-	<-t.done
+	// Close the PTY file
+	t.file.Close()
 	
-	return err
+	// Don't wait for waitForExit - it will complete on its own
+	// and won't call OnExit because we set closed = true
+	return nil
 }
