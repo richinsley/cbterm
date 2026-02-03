@@ -214,6 +214,44 @@ export class TabManager {
             this.postMessage({ type: 'resize', terminalId, cols, rows });
         });
         
+        // Handle keyboard shortcuts (Cmd+C, Cmd+V, etc.)
+        terminal.attachCustomKeyEventHandler((event) => {
+            // Cmd+C (copy) - only if there's a selection
+            if (event.metaKey && event.key === 'c' && terminal.hasSelection()) {
+                if (event.type === 'keydown') {
+                    const selection = terminal.getSelection();
+                    if (selection) {
+                        navigator.clipboard.writeText(selection);
+                    }
+                }
+                return false; // Prevent default and don't send to PTY
+            }
+            
+            // Cmd+V (paste)
+            if (event.metaKey && event.key === 'v') {
+                if (event.type === 'keydown') {
+                    navigator.clipboard.readText().then((text) => {
+                        if (text) {
+                            const encoded = btoa(text);
+                            this.postMessage({ type: 'input', terminalId, data: encoded });
+                        }
+                    });
+                }
+                return false; // Prevent default and don't send to PTY
+            }
+            
+            // Cmd+A (select all)
+            if (event.metaKey && event.key === 'a') {
+                if (event.type === 'keydown') {
+                    terminal.selectAll();
+                }
+                return false;
+            }
+            
+            // Let other keys through to terminal
+            return true;
+        });
+        
         // Focus handling - click anywhere on pane to focus
         element.addEventListener('mousedown', () => {
             this.setActivePane(paneId);
