@@ -21,6 +21,10 @@ type Terminal struct {
 	// OnOutput is called when data is available from the PTY.
 	// The data is base64 encoded for safe transport.
 	OnOutput func(data string)
+
+	// OnExit is called when the shell process exits.
+	// The callback receives the exit code (0 = success).
+	OnExit func(exitCode int)
 }
 
 // Options configures a new terminal.
@@ -43,6 +47,9 @@ type Options struct {
 
 	// OnOutput is called when data is available from the PTY
 	OnOutput func(data string)
+
+	// OnExit is called when the shell process exits
+	OnExit func(exitCode int)
 }
 
 // New creates and starts a new terminal with a shell.
@@ -91,10 +98,14 @@ func New(opts Options) (*Terminal, error) {
 		cmd:      cmd,
 		file:     ptmx,
 		OnOutput: opts.OnOutput,
+		OnExit:   opts.OnExit,
 	}
 
 	// Start reading from PTY
 	go t.readLoop()
+
+	// Monitor for process exit
+	go t.waitForExit()
 
 	return t, nil
 }
@@ -115,6 +126,27 @@ func (t *Terminal) readLoop() {
 			encoded := base64.StdEncoding.EncodeToString(buf[:n])
 			t.OnOutput(encoded)
 		}
+	}
+}
+
+// waitForExit waits for the shell process to exit and calls OnExit.
+func (t *Terminal) waitForExit() {
+	err := t.cmd.Wait()
+	
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
+
+	if t.OnExit != nil {
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+			}
+		}
+		t.OnExit(exitCode)
 	}
 }
 

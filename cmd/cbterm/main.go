@@ -175,6 +175,14 @@ func (tw *TerminalWindow) handleMessage(msg string) {
 					js := fmt.Sprintf("window.cbterm.write('%s')", data)
 					tw.window.GetWebView().EvalAsync(js)
 				},
+				OnExit: func(exitCode int) {
+					log.Printf("Shell exited with code %d", exitCode)
+					// Close window when shell exits
+					// Use Invoke to run on main thread
+					app.platform.Invoke(func() {
+						tw.window.Close()
+					})
+				},
 			})
 			if err != nil {
 				log.Printf("Failed to create terminal: %v", err)
