@@ -43,15 +43,10 @@ frontend-clean:
 webkit-download:
 	@echo "Downloading WebKit from latest release..."
 	@mkdir -p webkit/lib
-	@gh release download --repo $(REPO) --pattern 'webkit-macos-arm64.tar.gz' --dir webkit/lib --clobber || \
-		(echo "Download failed. Check: gh release list --repo $(REPO)" && exit 1)
+	@curl -fsSL "https://github.com/$(REPO)/releases/latest/download/webkit-macos-arm64.tar.gz" -o webkit/lib/webkit-macos-arm64.tar.gz || \
+		(echo "Download failed. Check: https://github.com/$(REPO)/releases" && exit 1)
 	@cd webkit/lib && tar -xzf webkit-macos-arm64.tar.gz && rm webkit-macos-arm64.tar.gz
 	@echo "WebKit frameworks extracted to webkit/lib/"
-
-# Trigger WebKit build on GitHub Actions
-webkit-build:
-	gh workflow run webkit-build.yml --repo $(REPO)
-	@echo "WebKit build triggered. Monitor at: https://github.com/$(REPO)/actions"
 
 # Clean build artifacts
 clean:
