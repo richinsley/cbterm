@@ -1,29 +1,43 @@
-.PHONY: all build clean run dev webkit-download frontend
+.PHONY: all build clean run dev frontend webkit-download
 
 BINARY := bin/cbterm
-WEBKIT_VERSION ?= latest
 REPO := calobozan/cbterm
 
 all: build
 
-# Build the Go binary
+# Build everything (frontend + Go binary)
 build: frontend
 	@mkdir -p bin
 	CGO_ENABLED=1 go build -o $(BINARY) ./cmd/cbterm
+	@echo "Built $(BINARY)"
 
 # Run the terminal
 run: build
 	./$(BINARY)
 
-# Development mode with hot reload (future)
+# Run in debug mode
+run-debug: build
+	./$(BINARY) --debug
+
+# Development mode: run frontend dev server + Go binary
 dev:
-	@echo "TODO: implement hot reload"
+	@echo "Starting development mode..."
+	@echo "1. Run 'cd frontend && npm run dev' in another terminal"
+	@echo "2. Then run: ./$(BINARY) --dev --debug"
 
 # Build frontend (xterm.js)
 frontend:
-	@if [ -f frontend/package.json ]; then \
-		cd frontend && npm install && npm run build; \
+	@if [ ! -d "frontend/node_modules" ]; then \
+		echo "Installing frontend dependencies..."; \
+		cd frontend && npm install; \
 	fi
+	@echo "Building frontend..."
+	@cd frontend && npm run build
+
+# Clean frontend and rebuild
+frontend-clean:
+	rm -rf frontend/node_modules frontend/dist
+	$(MAKE) frontend
 
 # Download prebuilt WebKit from GitHub releases
 webkit-download:
@@ -43,6 +57,10 @@ webkit-build:
 clean:
 	rm -rf bin/
 	rm -rf frontend/dist/
+
+# Full clean (including node_modules)
+distclean: clean
+	rm -rf frontend/node_modules
 	rm -rf webkit/lib/*.framework
 
 # Show help
@@ -50,9 +68,11 @@ help:
 	@echo "cbterm - AI-native terminal emulator"
 	@echo ""
 	@echo "Commands:"
-	@echo "  make build          - Build the terminal binary"
+	@echo "  make build          - Build frontend and Go binary"
 	@echo "  make run            - Build and run"
-	@echo "  make frontend       - Build frontend (xterm.js)"
+	@echo "  make run-debug      - Build and run with dev tools enabled"
+	@echo "  make dev            - Instructions for development mode"
+	@echo "  make frontend       - Build frontend only"
 	@echo "  make webkit-download - Download prebuilt WebKit"
-	@echo "  make webkit-build   - Trigger WebKit build on CI"
 	@echo "  make clean          - Clean build artifacts"
+	@echo "  make distclean      - Clean everything including node_modules"

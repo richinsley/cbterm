@@ -35,15 +35,29 @@ Project context for AI agents working on this codebase.
 - Working demo app with test HTML page
 - Message passing verified working
 
+### 2026-02-03: MVP Terminal
+- **frontend/**: xterm.js terminal UI
+  - TypeScript + Vite build
+  - WebGL renderer with canvas fallback
+  - WebSocket connection to backend
+  - Resize handling
+- **pkg/terminal/**: PTY and WebSocket server
+  - `pty.go`: PTY wrapper using github.com/creack/pty
+  - `server.go`: WebSocket server bridging frontend ↔ PTY
+- **Working end-to-end terminal!**
+  - Type commands, see output
+  - Proper terminal emulation via xterm.js
+  - Window resize propagates to PTY
+
 ---
 
 ## Work To Do
 
-### Phase 1: Terminal Core
-- [ ] Add xterm.js frontend (npm package)
-- [ ] PTY management (use `github.com/creack/pty`)
-- [ ] WebSocket bridge between PTY and xterm.js
-- [ ] Basic terminal working end-to-end
+### Phase 1: Terminal Core ✅
+- [x] Add xterm.js frontend (npm package)
+- [x] PTY management (use `github.com/creack/pty`)
+- [x] WebSocket bridge between PTY and xterm.js
+- [x] Basic terminal working end-to-end
 
 ### Phase 2: Custom WebKit Integration
 - [ ] Load custom WebKit.framework instead of system WebKit

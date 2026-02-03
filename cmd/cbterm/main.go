@@ -6,10 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/calobozan/cbterm/pkg/platform/darwin"
+	"github.com/calobozan/cbterm/pkg/terminal"
 )
+
+// Frontend will be served from filesystem for now
+// TODO: Embed frontend in binary for single-file distribution
 
 var (
 	version = "dev"
@@ -19,11 +26,40 @@ var (
 func main() {
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug mode (developer tools)")
+	shell := flag.String("shell", "", "Shell to run (default: $SHELL or /bin/zsh)")
+	devMode := flag.Bool("dev", false, "Development mode (load frontend from disk)")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("cbterm %s (%s)\n", version, commit)
 		os.Exit(0)
+	}
+
+	// Start terminal WebSocket server
+	termServer := terminal.NewServer(terminal.ServerOptions{
+		Shell: *shell,
+	})
+
+	wsAddr, err := termServer.Start()
+	if err != nil {
+		log.Fatalf("Failed to start terminal server: %v", err)
+	}
+	log.Printf("Terminal server listening on %s", wsAddr)
+
+	// Start HTTP server for frontend (in dev mode or embedded)
+	var frontendURL string
+	if *devMode {
+		// Serve from disk for hot reload during development
+		frontendURL = "http://localhost:3000"
+		log.Printf("Dev mode: expecting frontend at %s (run 'npm run dev' in frontend/)", frontendURL)
+	} else {
+		// Serve embedded frontend
+		httpAddr, err := serveFrontend(wsAddr)
+		if err != nil {
+			log.Fatalf("Failed to serve frontend: %v", err)
+		}
+		frontendURL = fmt.Sprintf("http://%s", httpAddr)
+		log.Printf("Frontend served at %s", frontendURL)
 	}
 
 	// Initialize platform
@@ -52,82 +88,19 @@ func main() {
 	})
 
 	// Build app menu
-	buildAppMenu(p)
+	buildAppMenu(p, win)
 
-	// Load a simple test page for now
-	// TODO: Load xterm.js frontend
-	win.GetWebView().LoadHTML(`<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>cbterm</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #1e1e1e;
-            color: #d4d4d4;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            box-sizing: border-box;
-        }
-        h1 {
-            color: #569cd6;
-            margin-bottom: 20px;
-        }
-        .terminal-placeholder {
-            flex: 1;
-            background: #0d0d0d;
-            border-radius: 8px;
-            padding: 16px;
-            font-family: "SF Mono", Menlo, Monaco, monospace;
-            font-size: 14px;
-            overflow: auto;
-        }
-        .cursor {
-            display: inline-block;
-            width: 8px;
-            height: 16px;
-            background: #d4d4d4;
-            animation: blink 1s step-end infinite;
-        }
-        @keyframes blink {
-            50% { opacity: 0; }
-        }
-        .info {
-            margin-top: 20px;
-            font-size: 12px;
-            color: #808080;
-        }
-    </style>
-</head>
-<body>
-    <h1>🦦 cbterm</h1>
-    <div class="terminal-placeholder">
-        <div>Welcome to cbterm - the AI-native terminal</div>
-        <div>&nbsp;</div>
-        <div>Platform layer initialized successfully!</div>
-        <div>&nbsp;</div>
-        <div>$ <span class="cursor"></span></div>
-    </div>
-    <div class="info">
-        Press Cmd+Option+I to open Developer Tools (if debug mode enabled)
-    </div>
-    <script>
-        // Test message passing to Go
-        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.cbterm) {
-            window.webkit.messageHandlers.cbterm.postMessage("Hello from JavaScript!");
-        }
-    </script>
-</body>
-</html>`, "")
+	// Load frontend
+	// Add WebSocket URL as query parameter
+	loadURL := fmt.Sprintf("%s?ws=ws://%s/ws", frontendURL, wsAddr)
+	log.Printf("Loading %s", loadURL)
+	win.GetWebView().LoadURL(loadURL)
 
 	// Handle window close
 	win.OnClose(func() bool {
 		log.Println("Window closing...")
-		return true // Allow close
+		termServer.Stop()
+		return true
 	})
 
 	// Show window and run
@@ -138,11 +111,52 @@ func main() {
 	}
 }
 
-func buildAppMenu(p *darwin.Platform) {
-	// Main menu bar
+func serveFrontend(wsAddr string) (string, error) {
+	// Find frontend dist directory
+	// Try relative to executable first, then current directory
+	var distPath string
+
+	// Try relative to executable
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidate := filepath.Join(exeDir, "..", "frontend", "dist")
+		if _, err := os.Stat(candidate); err == nil {
+			distPath = candidate
+		}
+	}
+
+	// Try relative to current directory
+	if distPath == "" {
+		cwd, _ := os.Getwd()
+		candidate := filepath.Join(cwd, "frontend", "dist")
+		if _, err := os.Stat(candidate); err == nil {
+			distPath = candidate
+		}
+	}
+
+	if distPath == "" {
+		return "", fmt.Errorf("frontend not found (run 'cd frontend && npm install && npm run build')")
+	}
+
+	log.Printf("Serving frontend from %s", distPath)
+
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir(distPath)))
+
+	// Start on random port
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+
+	go http.Serve(listener, mux)
+	return listener.Addr().String(), nil
+}
+
+func buildAppMenu(p *darwin.Platform, win *darwin.Window) {
 	menuBar := p.NewMenu()
 
-	// App menu (cbterm)
+	// App menu
 	appMenu := p.NewMenu()
 	appMenu.Add(darwin.MenuItem{
 		Label:   "About cbterm",
@@ -165,6 +179,38 @@ func buildAppMenu(p *darwin.Platform) {
 		Submenu: appMenu,
 	})
 
+	// Shell menu
+	shellMenu := p.NewMenu()
+	shellMenu.Add(darwin.MenuItem{
+		Label:    "New Window",
+		Shortcut: "Cmd+N",
+		Enabled:  true,
+		Action: func() {
+			log.Println("New window - TODO")
+		},
+	})
+	shellMenu.Add(darwin.MenuItem{
+		Label:    "New Tab",
+		Shortcut: "Cmd+T",
+		Enabled:  true,
+		Action: func() {
+			log.Println("New tab - TODO")
+		},
+	})
+	shellMenu.AddSeparator()
+	shellMenu.Add(darwin.MenuItem{
+		Label:    "Close Window",
+		Shortcut: "Cmd+W",
+		Enabled:  true,
+		Action: func() {
+			win.Close()
+		},
+	})
+	menuBar.Add(darwin.MenuItem{
+		Label:   "Shell",
+		Submenu: shellMenu,
+	})
+
 	// Edit menu
 	editMenu := p.NewMenu()
 	editMenu.Add(darwin.MenuItem{Label: "Undo", Shortcut: "Cmd+Z", Enabled: true})
@@ -185,6 +231,9 @@ func buildAppMenu(p *darwin.Platform) {
 		Label:    "Reload",
 		Shortcut: "Cmd+R",
 		Enabled:  true,
+		Action: func() {
+			win.GetWebView().Reload()
+		},
 	})
 	menuBar.Add(darwin.MenuItem{
 		Label:   "View",
