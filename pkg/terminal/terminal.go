@@ -17,6 +17,7 @@ type Terminal struct {
 	file   *os.File
 	mu     sync.Mutex
 	closed bool
+	done   chan struct{} // Closed when waitForExit completes
 
 	// OnOutput is called when data is available from the PTY.
 	// The data is base64 encoded for safe transport.
@@ -97,6 +98,7 @@ func New(opts Options) (*Terminal, error) {
 	t := &Terminal{
 		cmd:      cmd,
 		file:     ptmx,
+		done:     make(chan struct{}),
 		OnOutput: opts.OnOutput,
 		OnExit:   opts.OnExit,
 	}
@@ -130,14 +132,20 @@ func (t *Terminal) readLoop() {
 }
 
 // waitForExit waits for the shell process to exit and calls OnExit.
+// This is the ONLY place that calls cmd.Wait().
 func (t *Terminal) waitForExit() {
+	defer close(t.done)
+	
 	err := t.cmd.Wait()
 	
 	t.mu.Lock()
+	alreadyClosed := t.closed
 	t.closed = true
 	t.mu.Unlock()
 
-	if t.OnExit != nil {
+	// Only call OnExit if we weren't explicitly closed
+	// (if Close() was called, the caller handles cleanup)
+	if !alreadyClosed && t.OnExit != nil {
 		exitCode := 0
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -180,13 +188,22 @@ func (t *Terminal) Resize(rows, cols uint16) error {
 }
 
 // Close terminates the terminal.
+// It closes the PTY file (causing the shell to exit) and waits for cleanup.
 func (t *Terminal) Close() error {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil // Already closed
+	}
 	t.closed = true
 	t.mu.Unlock()
 
-	if err := t.file.Close(); err != nil {
-		return err
-	}
-	return t.cmd.Wait()
+	// Close the PTY file - this causes the shell to get SIGHUP and exit
+	err := t.file.Close()
+	
+	// Wait for waitForExit goroutine to complete
+	// This ensures cmd.Wait() finishes before we return
+	<-t.done
+	
+	return err
 }
