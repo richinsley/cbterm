@@ -2,6 +2,9 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { SearchAddon } from '@xterm/addon-search';
+import { SerializeAddon } from '@xterm/addon-serialize';
+import { ImageAddon } from '@xterm/addon-image';
 import '@xterm/xterm/css/xterm.css';
 
 // Terminal configuration
@@ -38,7 +41,14 @@ const term = new Terminal({
 
 // Addons
 const fitAddon = new FitAddon();
+const searchAddon = new SearchAddon();
+const serializeAddon = new SerializeAddon();
+const imageAddon = new ImageAddon();
+
 term.loadAddon(fitAddon);
+term.loadAddon(searchAddon);
+term.loadAddon(serializeAddon);
+term.loadAddon(imageAddon);
 term.loadAddon(new WebLinksAddon());
 
 // Mount terminal
@@ -134,6 +144,21 @@ term.onResize(({ cols, rows }) => {
     
     // Get terminal dimensions
     getSize: () => ({ cols: term.cols, rows: term.rows }),
+    
+    // Search functionality
+    search: {
+        find: (query: string, options?: { regex?: boolean; caseSensitive?: boolean }) => {
+            return searchAddon.findNext(query, options);
+        },
+        findNext: (query: string) => searchAddon.findNext(query),
+        findPrevious: (query: string) => searchAddon.findPrevious(query),
+        clear: () => searchAddon.clearDecorations(),
+    },
+    
+    // Serialize (for session save/restore)
+    serialize: () => serializeAddon.serialize(),
+    
+    // Image addon is auto-active for iTerm2 inline image protocol
 };
 
 // Signal ready to Go
