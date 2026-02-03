@@ -149,13 +149,20 @@ func (a *App) NewWindow() error {
 
 	// Handle window close
 	win.OnClose(func() bool {
+		// Collect terminals to close (don't hold lock while closing)
 		tw.mu.Lock()
-		for id, term := range tw.terminals {
-			term.Close()
-			log.Printf("Closed terminal %s", id)
+		toClose := make([]*terminal.Terminal, 0, len(tw.terminals))
+		for _, term := range tw.terminals {
+			toClose = append(toClose, term)
 		}
-		tw.terminals = nil
+		tw.terminals = nil // Clear map so OnExit callbacks don't try to modify
 		tw.mu.Unlock()
+
+		// Close terminals without holding lock
+		for _, term := range toClose {
+			term.Close()
+		}
+		log.Printf("Closed %d terminals", len(toClose))
 
 		a.mu.Lock()
 		delete(a.windows, win)
@@ -252,17 +259,23 @@ func (tw *TerminalWindow) handleMessage(msg string) {
 					}
 				},
 				OnExit: func(exitCode int) {
-					log.Printf("Terminal %s exited with code %d", terminalId, exitCode)
-					tw.mu.Lock()
-					delete(tw.terminals, terminalId)
-					remaining := len(tw.terminals)
-					tw.mu.Unlock()
+					log.Printf("Terminal %s exited with code %d", tid, exitCode)
 					
-					// Close window when last terminal exits
-					if remaining == 0 {
-						app.platform.Invoke(func() {
-							tw.window.Close()
-						})
+					tw.mu.Lock()
+					// Only process if terminal is still in map (not already removed by close_terminal)
+					if tw.terminals != nil && tw.terminals[tid] != nil {
+						delete(tw.terminals, tid)
+						remaining := len(tw.terminals)
+						tw.mu.Unlock()
+						
+						// Close window when last terminal exits
+						if remaining == 0 {
+							app.platform.Invoke(func() {
+								tw.window.Close()
+							})
+						}
+					} else {
+						tw.mu.Unlock()
 					}
 				},
 			})
@@ -284,13 +297,18 @@ func (tw *TerminalWindow) handleMessage(msg string) {
 
 	case "close_terminal":
 		terminalId := m.TerminalId
+		// Extract terminal from map, then close without holding lock
 		tw.mu.Lock()
-		if term := tw.terminals[terminalId]; term != nil {
-			term.Close()
+		term := tw.terminals[terminalId]
+		if term != nil {
 			delete(tw.terminals, terminalId)
-			log.Printf("Closed terminal %s", terminalId)
 		}
 		tw.mu.Unlock()
+		
+		if term != nil {
+			term.Close()
+			log.Printf("Closed terminal %s", terminalId)
+		}
 
 	case "input":
 		terminalId := m.TerminalId
