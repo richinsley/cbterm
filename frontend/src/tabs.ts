@@ -37,6 +37,17 @@ export interface TerminalInstance {
     element: HTMLElement;
 }
 
+// btoa() throws on characters above U+00FF (CJK, emoji, Powerline glyphs).
+// Encode UTF-8 bytes first so any Unicode input round-trips.
+function utf8ToBase64(text: string): string {
+    const bytes = new TextEncoder().encode(text);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+}
+
 // Message handler type
 type MessageHandler = (msg: object) => void;
 
@@ -222,7 +233,7 @@ export class TabManager {
         
         // Wire up terminal events
         terminal.onData((data) => {
-            const encoded = btoa(data);
+            const encoded = utf8ToBase64(data);
             this.postMessage({ type: 'input', terminalId, data: encoded });
         });
         
@@ -248,7 +259,7 @@ export class TabManager {
                 if (event.type === 'keydown') {
                     navigator.clipboard.readText().then((text) => {
                         if (text) {
-                            const encoded = btoa(text);
+                            const encoded = utf8ToBase64(text);
                             this.postMessage({ type: 'input', terminalId, data: encoded });
                         }
                     });
@@ -481,14 +492,17 @@ export class TabManager {
         }
     }
     
-    // Serialize a terminal's buffer content (scrollback + visible rows).
+    // Serialize a terminal's buffer content.
+    // Visible rows are always included; scrollback > 0 adds the last N
+    // lines of scrollback above them.
     // Returns the serialized string, or '' if the terminal is not found.
-    getBuffer(terminalId: string): string {
+    getBuffer(terminalId: string, scrollback = 0): string {
         for (const tab of this.tabs.values()) {
             const pane = this.findPaneByTerminalId(tab.rootPane, terminalId);
             if (pane?.terminal) {
                 try {
-                    return pane.terminal.serializeAddon.serialize();
+                    const options = scrollback > 0 ? { scrollback } : undefined;
+                    return pane.terminal.serializeAddon.serialize(options);
                 } catch (e) {
                     console.error('Failed to serialize terminal:', e);
                     return '';
@@ -496,6 +510,40 @@ export class TabManager {
             }
         }
         return '';
+    }
+    
+    // Clipboard operations for the active pane (used by the Edit menu)
+    copySelection(): void {
+        const pane = this.activeTerminalPane();
+        if (pane?.terminal && pane.terminal.terminal.hasSelection()) {
+            void navigator.clipboard.writeText(pane.terminal.terminal.getSelection());
+        }
+    }
+    
+    paste(): void {
+        const pane = this.activeTerminalPane();
+        if (!pane?.terminal) return;
+        void navigator.clipboard.readText().then((text) => {
+            if (text) {
+                const encoded = utf8ToBase64(text);
+                this.postMessage({ type: 'input', terminalId: pane.terminal!.id, data: encoded });
+            }
+        });
+    }
+    
+    selectAll(): void {
+        const pane = this.activeTerminalPane();
+        if (pane?.terminal) {
+            pane.terminal.terminal.selectAll();
+        }
+    }
+    
+    // The terminal pane that currently has focus
+    private activeTerminalPane(): Pane | null {
+        if (!this.activeTabId || !this.activePaneId) return null;
+        const tab = this.tabs.get(this.activeTabId);
+        if (!tab) return null;
+        return this.findPane(tab.rootPane, this.activePaneId);
     }
     
     // Find a pane by ID

@@ -616,14 +616,27 @@ func buildAppMenu() {
 	menuBar.Add(darwin.MenuItem{Label: "View", Submenu: viewMenu})
 
 	// Edit menu
+	// Note: no Undo/Redo/Cut — terminals have no undo semantics and cut
+	// (copy+delete selection) has no sensible target in a PTY.
 	editMenu := p.NewMenu()
-	editMenu.Add(darwin.MenuItem{Label: "Undo", Shortcut: "Cmd+Z", Enabled: true})
-	editMenu.Add(darwin.MenuItem{Label: "Redo", Shortcut: "Cmd+Shift+Z", Enabled: true})
-	editMenu.AddSeparator()
-	editMenu.Add(darwin.MenuItem{Label: "Cut", Shortcut: "Cmd+X", Enabled: true})
-	editMenu.Add(darwin.MenuItem{Label: "Copy", Shortcut: "Cmd+C", Enabled: true})
-	editMenu.Add(darwin.MenuItem{Label: "Paste", Shortcut: "Cmd+V", Enabled: true})
-	editMenu.Add(darwin.MenuItem{Label: "Select All", Shortcut: "Cmd+A", Enabled: true})
+	editMenu.Add(darwin.MenuItem{
+		Label:    "Copy",
+		Shortcut: "Cmd+C",
+		Enabled:  true,
+		Action:   func() { app.evalActiveWindow(`window.cbterm.copySelection && window.cbterm.copySelection()`) },
+	})
+	editMenu.Add(darwin.MenuItem{
+		Label:    "Paste",
+		Shortcut: "Cmd+V",
+		Enabled:  true,
+		Action:   func() { app.evalActiveWindow(`window.cbterm.paste && window.cbterm.paste()`) },
+	})
+	editMenu.Add(darwin.MenuItem{
+		Label:    "Select All",
+		Shortcut: "Cmd+A",
+		Enabled:  true,
+		Action:   func() { app.evalActiveWindow(`window.cbterm.selectAll && window.cbterm.selectAll()`) },
+	})
 	menuBar.Add(darwin.MenuItem{Label: "Edit", Submenu: editMenu})
 
 	// Window menu
@@ -763,9 +776,10 @@ func (a *App) TypeText(terminalID string, text string) error {
 }
 
 // GetTerminalBuffer gets the serialized buffer from a terminal.
-// Returns the terminal content (with ANSI escapes) as it currently renders,
-// covering scrollback plus visible rows.
-func (a *App) GetTerminalBuffer(terminalID string) (string, error) {
+// Returns the terminal content (with ANSI escapes) as it currently renders:
+// visible rows always, plus the last N lines of scrollback when
+// scrollback > 0.
+func (a *App) GetTerminalBuffer(terminalID string, scrollback int) (string, error) {
 	a.mu.Lock()
 	tw := a.activeWindow
 	a.mu.Unlock()
@@ -776,7 +790,7 @@ func (a *App) GetTerminalBuffer(terminalID string) (string, error) {
 	
 	// Ask the frontend for the terminal's serialized content
 	idJSON, _ := json.Marshal(terminalID)
-	js := fmt.Sprintf(`window.cbterm.getBuffer && window.cbterm.getBuffer(%s)`, idJSON)
+	js := fmt.Sprintf(`window.cbterm.getBuffer && window.cbterm.getBuffer(%s, %d)`, idJSON, scrollback)
 	
 	result, err := tw.window.GetWebView().Eval(js)
 	if err != nil {

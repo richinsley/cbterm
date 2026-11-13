@@ -71,7 +71,12 @@ resizeObserver.observe(container);
     
     // State inspection
     getActiveTerminalId: () => tabManager.getActiveTerminalId(),
-    getBuffer: (terminalId: string) => tabManager.getBuffer(terminalId),
+    getBuffer: (terminalId: string, scrollback: number) => tabManager.getBuffer(terminalId, scrollback),
+    
+    // Clipboard / selection for the active pane (Edit menu)
+    copySelection: () => tabManager.copySelection(),
+    paste: () => tabManager.paste(),
+    selectAll: () => tabManager.selectAll(),
     
     // Extension support
     // Callbacks are invoked with (base64Data, terminalId) for every

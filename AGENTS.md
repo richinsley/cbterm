@@ -85,6 +85,14 @@ Project context for AI agents working on this codebase.
   - Previously each closed window leaked its WKWebView + web content process
 - **Smoke-tested via `--control`**: ping / get_state / type / get_buffer /
   quit all pass; marker string round-tripped PTY → xterm → serialize → JSON
+- **get_buffer `scrollback: N` option** — visible rows always, plus last N
+  scrollback lines (verified: 200-line output, full=203 lines vs
+  scrollback:10=46 lines)
+- **Edit menu wired** — Copy/Paste/Select All call xterm via
+  `window.cbterm.copySelection/paste/selectAll` on the focused pane;
+  Undo/Redo/Cut removed (no terminal semantics for them)
+- **UTF-8 input fix** — btoa() threw on chars > U+00FF (CJK, emoji,
+  Powerline); utf8ToBase64() helper now used in all input/paste paths
 
 ---
 

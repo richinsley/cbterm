@@ -88,6 +88,25 @@ The `\n` sends Enter. Escape sequences work:
 - `\x03` — Ctrl+C
 - `\x04` — Ctrl+D
 
+### get_buffer
+Get the serialized content of a terminal (with ANSI escapes), as it
+currently renders. The visible rows are always included.
+
+```json
+{"cmd": "get_buffer", "terminal": "term-1"}
+```
+
+Optionally add the last N lines of scrollback above the visible rows:
+
+```json
+{"cmd": "get_buffer", "terminal": "term-1", "scrollback": 50}
+```
+
+Response:
+```json
+{"type": "response", "cmd": "get_buffer", "success": true, "data": {"buffer": "..."}}
+```
+
 ### focus
 Focus the cbterm window.
 

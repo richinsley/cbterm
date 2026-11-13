@@ -19,6 +19,7 @@ type Command struct {
 	TabID      string `json:"tab,omitempty"`
 	Text       string `json:"text,omitempty"`
 	Direction  string `json:"direction,omitempty"` // "horizontal" or "vertical"
+	Scrollback int    `json:"scrollback,omitempty"` // get_buffer: limit to last N lines
 	RequestID  string `json:"request_id,omitempty"` // For correlating responses
 }
 
@@ -53,7 +54,7 @@ type Handler interface {
 	
 	// Input/Output
 	TypeText(terminalID string, text string) error
-	GetTerminalBuffer(terminalID string) (string, error)
+	GetTerminalBuffer(terminalID string, scrollback int) (string, error)
 	
 	// State
 	GetState() (interface{}, error)
@@ -204,7 +205,7 @@ func (c *Controller) handleCommand(cmd Command) {
 		}
 		
 	case "get_buffer":
-		buffer, err := c.handler.GetTerminalBuffer(cmd.TerminalID)
+		buffer, err := c.handler.GetTerminalBuffer(cmd.TerminalID, cmd.Scrollback)
 		if err != nil {
 			resp.Error = err.Error()
 		} else {
