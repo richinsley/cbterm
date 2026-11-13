@@ -36,9 +36,17 @@ resizeObserver.observe(container);
 
 // API exposed to Go for writing output and control
 (window as any).cbterm = {
-    // Write base64-encoded data to terminal
+    // Write base64-encoded data to terminal, then notify extension subscribers
     write: (terminalId: string, base64Data: string) => {
         tabManager.writeToTerminal(terminalId, base64Data);
+        const callbacks = (window as any).cbterm._onDataCallbacks as ((data: string, terminalId: string) => void)[];
+        for (const cb of callbacks) {
+            try {
+                cb(base64Data, terminalId);
+            } catch (e) {
+                console.error('onData callback failed:', e);
+            }
+        }
     },
     
     // Legacy single-terminal write (for backwards compat during transition)
@@ -63,9 +71,12 @@ resizeObserver.observe(container);
     
     // State inspection
     getActiveTerminalId: () => tabManager.getActiveTerminalId(),
+    getBuffer: (terminalId: string) => tabManager.getBuffer(terminalId),
     
     // Extension support
-    _onDataCallbacks: [] as ((data: string) => void)[],
+    // Callbacks are invoked with (base64Data, terminalId) for every
+    // terminal output chunk, after it has been written to the terminal.
+    _onDataCallbacks: [] as ((data: string, terminalId: string) => void)[],
 };
 
 // Extension system

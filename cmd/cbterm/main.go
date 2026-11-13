@@ -477,6 +477,9 @@ func registerFrontendScheme() (string, error) {
 				// Terminal API module
 				return []byte(`
 					// Terminal API
+					// Terminal.onData(callback): callback receives (base64Data, terminalId)
+					// for every output chunk from any terminal, after it has been
+					// written to the terminal.
 					export const Terminal = {
 						write(data) {
 							window.webkit.messageHandlers.cbterm.postMessage(
@@ -759,7 +762,9 @@ func (a *App) TypeText(terminalID string, text string) error {
 	return term.WriteRaw([]byte(text))
 }
 
-// GetTerminalBuffer gets the visible buffer from a terminal.
+// GetTerminalBuffer gets the serialized buffer from a terminal.
+// Returns the terminal content (with ANSI escapes) as it currently renders,
+// covering scrollback plus visible rows.
 func (a *App) GetTerminalBuffer(terminalID string) (string, error) {
 	a.mu.Lock()
 	tw := a.activeWindow
@@ -770,11 +775,8 @@ func (a *App) GetTerminalBuffer(terminalID string) (string, error) {
 	}
 	
 	// Ask the frontend for the terminal's serialized content
-	js := fmt.Sprintf(`(function() {
-		// Find terminal by ID and serialize its buffer
-		// This requires the serialize addon which we have loaded
-		return ''; // TODO: implement buffer serialization
-	})()`)
+	idJSON, _ := json.Marshal(terminalID)
+	js := fmt.Sprintf(`window.cbterm.getBuffer && window.cbterm.getBuffer(%s)`, idJSON)
 	
 	result, err := tw.window.GetWebView().Eval(js)
 	if err != nil {

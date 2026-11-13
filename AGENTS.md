@@ -68,6 +68,24 @@ Project context for AI agents working on this codebase.
   - App quits when last window closes
   - Refactored to App/TerminalWindow structure
 
+### 2026-11-13: Control Read Path, Extension Output, Leak Fix
+- **get_buffer works end-to-end**
+  - SerializeAddon loaded on every terminal (frontend/src/tabs.ts)
+  - `window.cbterm.getBuffer(id)` exposed; `App.GetTerminalBuffer` implemented
+    (was a `return ''` TODO) — JSON-escaped terminal ID, no injection
+  - Control mode `get_buffer` returns serialized terminal content
+    (ANSI + scrollback) over the JSON protocol
+- **Extension Terminal.onData wired**
+  - `window.cbterm.write` fans output out to `_onDataCallbacks(data, terminalId)`
+  - First working extension verified end-to-end: manifest discovery in Go →
+    ES module load via `cbterm://extensions/` → `activate()` → onData chunks
+- **Window leak fixed** (pkg/platform/darwin/bridge.m)
+  - `windowShouldClose` releases the Go-owned window controller exactly once
+    per closed window (balances the `__bridge_retained` +1)
+  - Previously each closed window leaked its WKWebView + web content process
+- **Smoke-tested via `--control`**: ping / get_state / type / get_buffer /
+  quit all pass; marker string round-tripped PTY → xterm → serialize → JSON
+
 ---
 
 ## Work To Do
@@ -79,10 +97,10 @@ Project context for AI agents working on this codebase.
 - [x] Basic terminal working end-to-end
 
 ### Phase 2: Extension Foundation
-- [ ] JS extension loading mechanism
-- [ ] Extension ↔ Go message protocol
-- [ ] Enable more xterm.js addons (search, image, serialize)
-- [ ] Simple extension API
+- [x] JS extension loading mechanism
+- [x] Extension ↔ Go message protocol
+- [x] Enable more xterm.js addons (search, image, serialize)
+- [x] Simple extension API
 
 ### Phase 3: Custom WebKit Integration
 - [ ] Load custom WebKit.framework instead of system WebKit
@@ -176,4 +194,4 @@ webkit/              # WebKit patches and build artifacts
 
 ---
 
-*Last updated: 2026-02-03 (MVP complete!)*
+*Last updated: 2026-11-13 (control read path + extension output verified)*

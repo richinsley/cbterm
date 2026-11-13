@@ -6,6 +6,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { ImageAddon } from '@xterm/addon-image';
+import { SerializeAddon } from '@xterm/addon-serialize';
 
 // Types
 export interface Tab {
@@ -32,6 +33,7 @@ export interface TerminalInstance {
     terminal: Terminal;
     fitAddon: FitAddon;
     searchAddon: SearchAddon;
+    serializeAddon: SerializeAddon;
     element: HTMLElement;
 }
 
@@ -193,10 +195,12 @@ export class TabManager {
         
         const fitAddon = new FitAddon();
         const searchAddon = new SearchAddon();
+        const serializeAddon = new SerializeAddon();
         const imageAddon = new ImageAddon();
         
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(searchAddon);
+        terminal.loadAddon(serializeAddon);
         terminal.loadAddon(imageAddon);
         terminal.loadAddon(new WebLinksAddon());
         
@@ -205,6 +209,7 @@ export class TabManager {
             terminal,
             fitAddon,
             searchAddon,
+            serializeAddon,
             element: terminalContainer, // Terminal mounts in the container, not the pane
         };
         
@@ -474,6 +479,23 @@ export class TabManager {
                 return;
             }
         }
+    }
+    
+    // Serialize a terminal's buffer content (scrollback + visible rows).
+    // Returns the serialized string, or '' if the terminal is not found.
+    getBuffer(terminalId: string): string {
+        for (const tab of this.tabs.values()) {
+            const pane = this.findPaneByTerminalId(tab.rootPane, terminalId);
+            if (pane?.terminal) {
+                try {
+                    return pane.terminal.serializeAddon.serialize();
+                } catch (e) {
+                    console.error('Failed to serialize terminal:', e);
+                    return '';
+                }
+            }
+        }
+        return '';
     }
     
     // Find a pane by ID

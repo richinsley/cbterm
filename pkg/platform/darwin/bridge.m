@@ -23,6 +23,7 @@ static CBTermSchemeHandler *gSchemeHandler = nil;
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, assign) void *closeCallback;
+@property (nonatomic, assign) BOOL goReleased;
 @end
 
 @interface CBTermMessageHandler : NSObject <WKScriptMessageHandler>
@@ -154,10 +155,21 @@ void cbterm_app_invoke(void* callback) {
 }
 
 - (BOOL)windowShouldClose:(NSWindow *)sender {
+    BOOL shouldClose = YES;
     if (self.closeCallback) {
-        return goWindowCloseCallback(self.closeCallback);
+        shouldClose = goWindowCloseCallback(self.closeCallback);
     }
-    return YES;
+    if (shouldClose && !self.goReleased) {
+        self.goReleased = YES;
+        // Balance the +1 taken via __bridge_retained in cbterm_window_new.
+        // Runs after the Go close callback has done its cleanup, so the
+        // Go side no longer references this window. Without this release
+        // the controller (and its WKWebView, with its web content process)
+        // would leak for the lifetime of the app on every closed window.
+        // ARC keeps self alive until this method returns.
+        CFRelease((__bridge CFTypeRef)self);
+    }
+    return shouldClose;
 }
 
 @end
