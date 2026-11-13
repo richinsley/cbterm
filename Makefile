@@ -1,7 +1,6 @@
-.PHONY: all build clean run dev frontend webkit-download
+.PHONY: all build clean run run-debug web dev frontend frontend-clean
 
 BINARY := bin/cbterm
-REPO := calobozan/cbterm
 
 all: build
 
@@ -11,7 +10,7 @@ build: frontend
 	CGO_ENABLED=1 go build -o $(BINARY) ./cmd/cbterm
 	@echo "Built $(BINARY)"
 
-# Run the terminal
+# Run the terminal (native webview window)
 run: build
 	./$(BINARY)
 
@@ -19,11 +18,15 @@ run: build
 run-debug: build
 	./$(BINARY) --debug
 
+# Run as a terminal server (prints a URL for any browser)
+web: build
+	./$(BINARY) --web
+
 # Development mode: run frontend dev server + Go binary
 dev:
 	@echo "Starting development mode..."
 	@echo "1. Run 'cd frontend && npm run dev' in another terminal"
-	@echo "2. Then run: ./$(BINARY) --dev --debug"
+	@echo "2. Then run: ./$(BINARY) --debug"
 
 # Build frontend (xterm.js)
 frontend:
@@ -37,15 +40,6 @@ frontend-clean:
 	rm -rf frontend/node_modules frontend/dist
 	$(MAKE) frontend
 
-# Download prebuilt WebKit from GitHub releases
-webkit-download:
-	@echo "Downloading WebKit from latest release..."
-	@mkdir -p webkit/lib
-	@curl -fsSL "https://github.com/$(REPO)/releases/latest/download/webkit-macos-arm64.tar.gz" -o webkit/lib/webkit-macos-arm64.tar.gz || \
-		(echo "Download failed. Check: https://github.com/$(REPO)/releases" && exit 1)
-	@cd webkit/lib && tar -xzf webkit-macos-arm64.tar.gz && rm webkit-macos-arm64.tar.gz
-	@echo "WebKit frameworks extracted to webkit/lib/"
-
 # Clean build artifacts
 clean:
 	rm -rf bin/
@@ -54,7 +48,6 @@ clean:
 # Full clean (including node_modules)
 distclean: clean
 	rm -rf frontend/node_modules
-	rm -rf webkit/lib/*.framework
 
 # Show help
 help:
@@ -62,10 +55,10 @@ help:
 	@echo ""
 	@echo "Commands:"
 	@echo "  make build          - Build frontend and Go binary"
-	@echo "  make run            - Build and run"
-	@echo "  make run-debug      - Build and run with dev tools enabled"
+	@echo "  make run            - Build and run (native webview)"
+	@echo "  make run-debug      - Build and run with debug logging"
+	@echo "  make web            - Build and run as a terminal server"
 	@echo "  make dev            - Instructions for development mode"
 	@echo "  make frontend       - Build frontend only"
-	@echo "  make webkit-download - Download prebuilt WebKit"
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make distclean      - Clean everything including node_modules"

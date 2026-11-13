@@ -1,16 +1,8 @@
 import '@xterm/xterm/css/xterm.css';
 import './tabs.css';
 import { TabManager } from './tabs';
-
-// Native bridge
-const bridge = (window as any).webkit?.messageHandlers?.cbterm;
-
-function postMessage(msg: object | string) {
-    if (bridge) {
-        const data = typeof msg === 'string' ? msg : JSON.stringify(msg);
-        bridge.postMessage(data);
-    }
-}
+import send from './bridge';
+import { installShortcuts } from './shortcuts';
 
 // Initialize container
 const container = document.getElementById('terminal')!;
@@ -19,10 +11,13 @@ container.style.flexDirection = 'column';
 container.style.height = '100%';
 
 // Create tab manager
-const tabManager = new TabManager(container, postMessage);
+const tabManager = new TabManager(container, send);
 
 // Create initial tab
 const initialTab = tabManager.createTab();
+
+// Keyboard shortcuts (replace the native menus)
+installShortcuts();
 
 // Handle resize
 window.addEventListener('resize', () => {
@@ -115,18 +110,18 @@ const loadedExtensions: Map<string, { module: ExtensionModule; context: Extensio
 
 async function loadExtensions() {
     try {
-        const response = await fetch('cbterm://api/extensions/list.json');
+        const response = await fetch('/api/extensions/list.json');
         if (!response.ok) return;
         
         const extensions: Extension[] = await response.json();
         
         for (const ext of extensions) {
             try {
-                const moduleUrl = `cbterm://extensions/${ext.manifest.name}/${ext.manifest.main}`;
+                const moduleUrl = `/extensions/${ext.manifest.name}/${ext.manifest.main}`;
                 const module: ExtensionModule = await import(/* @vite-ignore */ moduleUrl);
                 
                 const context: ExtensionContext = {
-                    extensionPath: `cbterm://extensions/${ext.manifest.name}`,
+                    extensionPath: `/extensions/${ext.manifest.name}`,
                     subscriptions: [],
                 };
                 
@@ -135,9 +130,9 @@ async function loadExtensions() {
                 }
                 
                 loadedExtensions.set(ext.manifest.name, { module, context });
-                postMessage({ type: 'extension_loaded', name: ext.manifest.name, version: ext.manifest.version });
+                send({ type: 'extension_loaded', name: ext.manifest.name, version: ext.manifest.version });
             } catch (e) {
-                postMessage({ type: 'extension_error', name: ext.manifest.name, error: String(e) });
+                send({ type: 'extension_error', name: ext.manifest.name, error: String(e) });
             }
         }
     } catch (e) {
@@ -167,9 +162,9 @@ window.addEventListener('beforeunload', () => {
 
 // Load extensions
 loadExtensions().then(() => {
-    postMessage({ type: 'extensions_loaded', count: loadedExtensions.size });
+    send({ type: 'extensions_loaded', count: loadedExtensions.size });
 }).catch((e) => {
-    postMessage({ type: 'extensions_error', error: String(e) });
+    send({ type: 'extensions_error', error: String(e) });
 });
 
 // Get initial terminal info and signal ready
@@ -178,7 +173,7 @@ if (firstPane.terminal) {
     // Wait a bit for terminal to be mounted and sized
     setTimeout(() => {
         const term = firstPane.terminal!;
-        postMessage({ 
+        send({ 
             type: 'ready', 
             terminalId: term.id,
             cols: term.terminal.cols, 

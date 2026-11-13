@@ -11,9 +11,8 @@ bin/
 node_modules/
 frontend/dist/
 
-# WebKit build artifacts
-webkit/lib/
-WebKit/
+# WebKit build artifacts (legacy CI pipeline, retired with go-webui)
+webkit/
 
 # IDE
 .idea/
@@ -27,4 +26,4 @@ WebKit/
 # Build artifacts
 *.log
 *.tmp
-cbterm
+/cbterm

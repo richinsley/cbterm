@@ -16,6 +16,9 @@ Send JSON commands (one per line) to stdin, receive JSON responses/events on std
 
 ## Commands
 
+Note: the `terminal` and `tab` fields may also be spelled `terminal_id` and
+`tab_id` (the names used in responses and events); both are accepted.
+
 ### ping
 Health check.
 
@@ -106,6 +109,24 @@ Response:
 ```json
 {"type": "response", "cmd": "get_buffer", "success": true, "data": {"buffer": "..."}}
 ```
+
+### eval_js
+Run raw JavaScript in the app's UI. The script is executed as an async
+function body, so a top-level `return` produces the result (returned as a
+string — use `JSON.stringify` for structured values). Useful for
+inspecting UI state (DOM, terminal dimensions, active tab) that the other
+commands don't cover.
+
+```json
+{"cmd": "eval_js", "js": "return JSON.stringify({tabs: document.querySelectorAll('.tab').length})"}
+```
+
+Response:
+```json
+{"type": "response", "cmd": "eval_js", "success": true, "data": {"result": "{\"tabs\":2}"}}
+```
+
+Requires the single-client Script() path — not available with `--multi`.
 
 ### focus
 Focus the cbterm window.

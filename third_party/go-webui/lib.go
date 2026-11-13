@@ -1,0 +1,1129 @@
+package webui
+
+/*
+  WebUI Library
+  http://webui.me
+  https://github.com/webui-dev/webui
+  Copyright (c) 2020-2025 Hassan Draga.
+  Licensed under MIT License.
+  All rights reserved.
+  Canada.
+*/
+
+/*
+#cgo CFLAGS: -Iwebui/include
+#include "webui.h"
+#include <stdlib.h>
+
+extern void goWebuiEventHandler(webui_event_t* e);
+extern void* goWebuiFileHandler(char* filename, int* length);
+extern void* goWebuiFileHandlerWindow(size_t window, char* filename, int* length);
+extern void goWebuiLoggerHandler(size_t level, char* message, void* user_data);
+extern bool goWebuiCloseHandlerWv(size_t window);
+
+// Wrapper functions to handle const casting
+static const void* goWebuiFileHandlerWrapper(const char* filename, int* length) {
+	return (const void*)goWebuiFileHandler((char*)filename, length);
+}
+
+static const void* goWebuiFileHandlerWindowWrapper(size_t window, const char* filename, int* length) {
+	return (const void*)goWebuiFileHandlerWindow(window, (char*)filename, length);
+}
+
+static void goWebuiLoggerHandlerWrapper(size_t level, const char* message, void* user_data) {
+	goWebuiLoggerHandler(level, (char*)message, user_data);
+}
+
+static size_t go_webui_bind(size_t win, const char* element) {
+	return webui_bind(win, element, goWebuiEventHandler);
+}
+
+static void go_webui_set_file_handler(size_t win) {
+	webui_set_file_handler(win, goWebuiFileHandlerWrapper);
+}
+
+static void go_webui_set_file_handler_window(size_t win) {
+	webui_set_file_handler_window(win, goWebuiFileHandlerWindowWrapper);
+}
+
+static void go_webui_set_logger(void* user_data) {
+	webui_set_logger(goWebuiLoggerHandlerWrapper, user_data);
+}
+
+static bool goWebuiCloseHandlerWvWrapper(size_t window) {
+	return goWebuiCloseHandlerWv(window);
+}
+
+static void go_webui_set_close_handler_wv(size_t win) {
+	webui_set_close_handler_wv(win, goWebuiCloseHandlerWvWrapper);
+}
+*/
+import "C"
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"reflect"
+	"time"
+	"unsafe"
+)
+
+type Window uint
+
+type Browser uint8
+
+const (
+	NoBrowser Browser = iota
+	AnyBrowser
+	Chrome
+	Firefox
+	Edge
+	Safari
+	Chromium
+	Opera
+	Brave
+	Vivaldi
+	Epic
+	Yandex
+	ChromiumBased
+	Webview
+)
+
+type Runtime uint8
+
+const (
+	None Runtime = iota
+	Deno
+	Nodejs
+	Bun
+)
+
+type Config uint
+
+const (
+	// ShowWaitConnection controls if webui_show(), webui_show_browser() and
+	// webui_show_wv() should wait for the window to connect before returns or not.
+	// Default: True
+	ShowWaitConnection Config = iota
+	// UiEventBlocking controls if WebUI should block and process the UI events
+	// one at a time in a single thread (True), or process every event in a new
+	// non-blocking thread (False). This updates all windows.
+	// Default: False
+	UiEventBlocking
+	// FolderMonitor automatically refreshes the window UI when any file in the
+	// root folder gets changed.
+	// Default: False
+	FolderMonitor
+	// MultiClient allows multiple clients to connect to the same window.
+	// This is helpful for web apps (non-desktop software).
+	// Default: False
+	MultiClient
+	// UseCookies allows or prevents WebUI from adding webui_auth cookies.
+	// WebUI uses these cookies to identify clients and block unauthorized access.
+	// Default: True
+	UseCookies
+	// AsynchronousResponse makes WebUI wait until the backend sets a response
+	// using webui_return_x() if the backend uses asynchronous operations.
+	AsynchronousResponse
+)
+
+type LoggerLevel uint
+
+const (
+	// LoggerLevelDebug shows all logs with all details.
+	LoggerLevelDebug LoggerLevel = iota
+	// LoggerLevelInfo shows only general logs.
+	LoggerLevelInfo
+	// LoggerLevelError shows only fatal error logs.
+	LoggerLevelError
+)
+
+type EventType uint8
+
+const (
+	Disconnected EventType = iota
+	Connected
+	MouseClick
+	Navigation
+	Callback
+)
+
+type Event struct {
+	Window       Window
+	EventType    EventType
+	Element      string
+	eventNumber  uint
+	bindId       uint
+	ClientId     uint
+	ConnectionId uint
+	Cookies      string
+}
+
+type ScriptOptions struct {
+	Timeout    uint
+	BufferSize uint
+}
+
+type Void *struct{}
+
+type noArgError struct {
+	element string
+}
+
+type getArgError struct {
+	err     error
+	element string
+	typ     string
+}
+
+// User Go Callback Functions list
+var funcList = make(map[Window]map[uint]func(Event) any)
+
+// User Go File Handler Functions
+var fileHandlerList = make(map[Window]FileHandler)
+var fileHandlerWindowList = make(map[Window]FileHandlerWindow)
+
+// User Go Close Handler Functions (WebView)
+var closeHandlerList = make(map[Window]func(Window) bool)
+
+// User Go Logger Function
+var loggerFunc LoggerFunc
+var loggerUserData unsafe.Pointer
+
+// == Definitions =============================================================
+
+// NewWindow creates a new WebUI window object and returns the window number.
+func NewWindow() Window {
+	w := Window(C.size_t(C.webui_new_window()))
+	funcList[w] = make(map[uint]func(Event) any)
+	return w
+}
+
+// NewWindow creates a new webui window object using a specified window number.
+func (w Window) NewWindow() {
+	funcList[w] = make(map[uint]func(Event) any)
+	C.webui_new_window_id(C.size_t(w))
+}
+
+// NewWindowId returns a free window number that can be used with `NewWindow`.
+func NewWindowId() Window {
+	return Window(C.webui_get_new_window_id())
+}
+
+// Private function that receives and handles webui events as go events.
+//
+//export goWebuiEventHandler
+func goWebuiEventHandler(e *C.webui_event_t) {
+	// Create Go event from C event.
+	goEvent := Event{
+		Window:       Window(e.window),
+		EventType:    EventType(e.event_type),
+		Element:      C.GoString(e.element),
+		eventNumber:  uint(e.event_number),
+		bindId:       uint(e.bind_id),
+		ClientId:     uint(e.client_id),
+		ConnectionId: uint(e.connection_id),
+		Cookies:      C.GoString(e.cookies),
+	}
+	// Call user callback function.
+	result := funcList[goEvent.Window][goEvent.bindId](goEvent)
+	if result == nil {
+		return
+	}
+	response, err := json.Marshal(result)
+	if err != nil {
+		log.Println("error: failed to encode JS result into JSON", err)
+	}
+	cresponse := C.CString(string(response))
+	defer C.free(unsafe.Pointer(cresponse))
+	C.webui_interface_set_response(e.window, e.event_number, cresponse)
+}
+
+// Private function that receives and handles file handler callbacks.
+//
+//export goWebuiFileHandler
+func goWebuiFileHandler(filename *C.char, length *C.int) unsafe.Pointer {
+	// Get the filename as Go string
+	filenameStr := C.GoString(filename)
+
+	// Find the handler by checking all windows
+	// Note: Since we don't have window context here, we use the first registered handler
+	// This matches the C API behavior where webui_set_file_handler doesn't take a window parameter
+	for window, handler := range fileHandlerList {
+		if handler != nil {
+			// Call the user's handler
+			data, dataLen := handler(filenameStr)
+
+			// If handler returns nil, tell WebUI to serve file locally
+			if data == nil || dataLen == 0 {
+				*length = 0
+				return nil
+			}
+
+			// Allocate WebUI-managed memory
+			webuiBuffer := C.webui_malloc(C.size_t(dataLen))
+			if webuiBuffer == nil {
+				*length = 0
+				return nil
+			}
+
+			// Copy data to WebUI buffer
+			C.webui_memcpy(webuiBuffer, unsafe.Pointer(&data[0]), C.size_t(dataLen))
+
+			// Set the length
+			*length = C.int(dataLen)
+
+			// Use the async response API
+			C.webui_interface_set_response_file_handler(C.size_t(window), webuiBuffer, C.int(dataLen))
+
+			return webuiBuffer
+		}
+	}
+
+	*length = 0
+	return nil
+}
+
+// Private function that receives and handles file handler callbacks with window parameter.
+//
+//export goWebuiFileHandlerWindow
+func goWebuiFileHandlerWindow(window C.size_t, filename *C.char, length *C.int) unsafe.Pointer {
+	// Get the filename as Go string
+	filenameStr := C.GoString(filename)
+	goWindow := Window(window)
+
+	// Get the handler for this window
+	handler, exists := fileHandlerWindowList[goWindow]
+	if !exists || handler == nil {
+		*length = 0
+		return nil
+	}
+
+	// Call the user's handler
+	data, dataLen := handler(goWindow, filenameStr)
+
+	// If handler returns nil, tell WebUI to serve file locally
+	if data == nil || dataLen == 0 {
+		*length = 0
+		return nil
+	}
+
+	// Allocate WebUI-managed memory
+	webuiBuffer := C.webui_malloc(C.size_t(dataLen))
+	if webuiBuffer == nil {
+		*length = 0
+		return nil
+	}
+
+	// Copy data to WebUI buffer
+	C.webui_memcpy(webuiBuffer, unsafe.Pointer(&data[0]), C.size_t(dataLen))
+
+	// Set the length
+	*length = C.int(dataLen)
+
+	// Use the async response API
+	C.webui_interface_set_response_file_handler(C.size_t(window), webuiBuffer, C.int(dataLen))
+
+	return webuiBuffer
+}
+
+// Private function that receives and handles WebView close handler callbacks.
+//
+//export goWebuiCloseHandlerWv
+func goWebuiCloseHandlerWv(window C.size_t) C._Bool {
+	goWindow := Window(window)
+	handler, exists := closeHandlerList[goWindow]
+	if !exists || handler == nil {
+		return C._Bool(true)
+	}
+	return C._Bool(handler(goWindow))
+}
+
+// Private function that receives and handles logger callbacks.
+//
+//export goWebuiLoggerHandler
+func goWebuiLoggerHandler(level C.size_t, message *C.char, userData unsafe.Pointer) {
+	if loggerFunc == nil {
+		return
+	}
+
+	// Convert C types to Go types
+	goLevel := LoggerLevel(level)
+	goMessage := C.GoString(message)
+
+	// Call the user's logger function
+	loggerFunc(goLevel, goMessage, loggerUserData)
+}
+
+// Bind binds a specific html element click event with a function. Empty element means all events.
+func (w Window) Bind(element string, callback func(Event) any) {
+	celement := C.CString(element)
+	defer C.free(unsafe.Pointer(celement))
+	funcId := uint(C.go_webui_bind(C.size_t(w), celement))
+	funcList[w][funcId] = callback
+}
+
+// Bind binds a specific html element click event with a function. Empty element means all events.
+func Bind[T any](w Window, element string, callback func(Event) T) {
+	celement := C.CString(element)
+	defer C.free(unsafe.Pointer(celement))
+	funcId := uint(C.go_webui_bind(C.size_t(w), celement))
+	funcList[w][funcId] = func(e Event) any {
+		return callback(e)
+	}
+}
+
+// SetContext sets user data for a specific element that can be retrieved later using GetContext.
+// Use this API after using Bind() to add any user data that can be read later.
+func (w Window) SetContext(element string, context unsafe.Pointer) {
+	celement := C.CString(element)
+	defer C.free(unsafe.Pointer(celement))
+	C.webui_set_context(C.size_t(w), celement, context)
+}
+
+// GetContext gets user data that was set using SetContext.
+func (e Event) GetContext() unsafe.Pointer {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	return C.webui_get_context(cEvent)
+}
+
+// Show opens a window using embedded HTML, or a file. If the window is already open, it will be refreshed.
+func (w Window) Show(content string) (err error) {
+	ccontent := C.CString(content)
+	defer C.free(unsafe.Pointer(ccontent))
+	if !C.webui_show(C.size_t(w), ccontent) {
+		err = errors.New("error: failed to show window")
+	}
+	return
+}
+
+// ShowBrowser opens a window using embedded HTML, or a file in a specific web browser.
+// If the window is already open, it will be refreshed.
+func (w Window) ShowBrowser(content string, browser Browser) (err error) {
+	ccontent := C.CString(content)
+	defer C.free(unsafe.Pointer(ccontent))
+	if !C.webui_show_browser(C.size_t(w), ccontent, C.size_t(browser)) {
+		err = errors.New("error: failed to show window")
+	}
+	return
+}
+
+// SetKiosk determines whether Kiosk mode (full screen) is enabled for the window.
+func (w Window) SetKiosk(enable bool) {
+	C.webui_set_kiosk(C.size_t(w), C._Bool(enable))
+}
+
+// Wait waits until all opened windows get closed.
+func Wait() {
+	// Wait for internal server threads
+	time.Sleep(100 * time.Millisecond)
+	if !bool(C.webui_wait_async()) {
+		return
+	}
+	// Wait for all windows to close
+	C.webui_wait()
+}
+
+// Close closes the window. The window object will still exist. All clients.
+func (w Window) Close() {
+	C.webui_close(C.size_t(w))
+}
+
+// CloseClient closes a specific client.
+func (e Event) CloseClient() {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	C.webui_close_client(cEvent)
+}
+
+// Destroy closes the window and free all memory resources.
+func (w Window) Destroy() {
+	C.webui_destroy(C.size_t(w))
+}
+
+// Exit closes all open windows. `Wait()` will return (Break).
+func Exit() {
+	C.webui_exit()
+}
+
+// SetRootFolder sets the web-server root folder path for the window.
+func (w Window) SetRootFolder(path string) {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	C.webui_set_root_folder(C.size_t(w), cpath)
+}
+
+// SetRootFolder sets the web-server root folder path for all windows.
+// Deprecated: use SetDefaultRootFolder instead
+func SetRootFolder(path string) {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	C.webui_set_default_root_folder(cpath)
+}
+
+// SetDefaultRootFolder sets the web-server root folder path for all windows.
+func SetDefaultRootFolder(path string) (err error) {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	if !C.webui_set_default_root_folder(cpath) {
+		err = errors.New("error: failed to set the default root folder")
+	}
+	return
+}
+
+// IsShown checks if the window it's still running.
+func (w Window) IsShown() bool {
+	status := C.webui_is_shown(C.size_t(w))
+	return bool(status)
+}
+
+// SetTimeout sets the maximum time in seconds to wait for the browser to start.
+func SetTimeout(seconds uint) {
+	C.webui_set_timeout(C.size_t(seconds))
+}
+
+// SetConfig controls the WebUI behaviour. It's recommended to be called at the beginning.
+func SetConfig(option Config, status bool) {
+	C.webui_set_config(C.webui_config(option), C._Bool(status))
+}
+
+// SetEventBlocking controls if UI events coming from this window should be processed
+// one at a time in a single blocking thread (True), or process every event in a new
+// non-blocking thread (False). This updates a single window.
+// Use SetConfig(UiEventBlocking, ...) to update all windows.
+func (w Window) SetEventBlocking(status bool) {
+	C.webui_set_event_blocking(C.size_t(w), C._Bool(status))
+}
+
+// SetIcon sets the default embedded HTML favicon.
+func (w Window) SetIcon(icon string, icon_type string) {
+	cicon := C.CString(icon)
+	cicon_type := C.CString(icon_type)
+	defer C.free(unsafe.Pointer(cicon))
+	defer C.free(unsafe.Pointer(cicon_type))
+	C.webui_set_icon(C.size_t(w), cicon, cicon_type)
+}
+
+// Encode sends text based data to the UI using base64 encoding.
+func Encode(str string) string {
+	cstr := C.CString(str)
+	defer C.free(unsafe.Pointer(cstr))
+	encoded := C.webui_encode(cstr)
+	defer C.free(unsafe.Pointer(encoded))
+	return C.GoString(encoded)
+}
+
+// Decode decodes Base64 encoded text received from the the UI.
+func Decode(str string) string {
+	cstr := C.CString(str)
+	defer C.free(unsafe.Pointer(cstr))
+	decoded := C.webui_decode(cstr)
+	defer C.free(unsafe.Pointer(decoded))
+	return C.GoString(decoded)
+}
+
+// SetHide determines whether the window is run in hidden mode.
+func (w Window) SetHide(status bool) {
+	C.webui_set_hide(C.size_t(w), C._Bool(status))
+}
+
+// SetSize sets the window size.
+func (w Window) SetSize(width uint, height uint) {
+	C.webui_set_size(C.size_t(w), C.uint(width), C.uint(height))
+}
+
+// SetPosition sets the window position.
+func (w Window) SetPosition(x uint, y uint) {
+	C.webui_set_position(C.size_t(w), C.uint(x), C.uint(y))
+}
+
+// SetProfile sets the web browser profile to use.
+// An empty `name` and `path` means the default user profile.
+// Needs to be called before `webui_show()`.
+func (w Window) SetProfile(name string, path string) {
+	cname := C.CString(name)
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cname))
+	defer C.free(unsafe.Pointer(cpath))
+	C.webui_set_profile(C.size_t(w), cname, cpath)
+}
+
+// SetProxy sets the web browser proxyServer to use. Need to be called before `Show()`.
+func (w Window) SetProxy(proxyServer string) {
+	cproxyServer := C.CString(proxyServer)
+	defer C.free(unsafe.Pointer(cproxyServer))
+	C.webui_set_proxy(C.size_t(w), cproxyServer)
+}
+
+// GetUrl returns the full current URL
+func (w Window) GetUrl() string {
+	return C.GoString(C.webui_get_url(C.size_t(w)))
+}
+
+// SetPublic allows a specific window address to be accessible from a public network.
+func (w Window) SetPublic(status bool) {
+	C.webui_set_public(C.size_t(w), C._Bool(status))
+}
+
+// Navigate navigates to a specific URL. All clients.
+func (w Window) Navigate(url string) {
+	curl := C.CString(url)
+	defer C.free(unsafe.Pointer(curl))
+	C.webui_navigate(C.size_t(w), curl)
+}
+
+// NavigateClient navigates to a specific URL. Single client.
+func (e Event) NavigateClient(url string) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	curl := C.CString(url)
+	defer C.free(unsafe.Pointer(curl))
+	C.webui_navigate_client(cEvent, curl)
+}
+
+// Clean frees all memory resources. It should only be called at the end.
+func Clean() {
+	C.webui_clean()
+}
+
+// DeleteAllProfiles deletes all local web-browser profile folders. It should only be called at the end.
+func DeleteAllProfiles() {
+	C.webui_delete_all_profiles()
+}
+
+// DeleteProfile deletes the specified windows local web-browser profile folder.
+func (w Window) DeleteProfile() {
+	C.webui_delete_profile(C.size_t(w))
+}
+
+// GetParentProcessID returns the ID of the parent process (The web browser may re-create another new process).
+func (w Window) GetParentProcessID() uint64 {
+	return uint64(C.webui_get_parent_process_id(C.size_t(w)))
+}
+
+// GetParentProcessID returns the ID of the last child process.
+func (w Window) GetChildProcessID() uint64 {
+	return uint64(C.webui_get_child_process_id(C.size_t(w)))
+}
+
+// GetPort returns the network port of the running window. If the window isn't
+// running, an error is returned.
+func (w Window) GetPort() (int, error) {
+	port := int(C.webui_get_port(C.size_t(w)))
+	if port == 0 {
+		return 0, errors.New("error: failed to get port")
+	}
+	return port, nil
+}
+
+// SetPort sets a custom web-server network port to be used by WebUI. Returns
+// true if the port is free and usable by WebUI.
+func (w Window) SetPort(port uint) bool {
+	return bool(C.webui_set_port(C.size_t(w), C.size_t(port)))
+}
+
+// SetCenter centers the window on the screen. Works better with WebView.
+// Call this function before Show() for better results.
+func (w Window) SetCenter() {
+	C.webui_set_center(C.size_t(w))
+}
+
+// Minimize minimizes a WebView window.
+func (w Window) Minimize() {
+	C.webui_minimize(C.size_t(w))
+}
+
+// Maximize maximizes a WebView window.
+func (w Window) Maximize() {
+	C.webui_maximize(C.size_t(w))
+}
+
+// SetResizable sets whether the window frame is resizable or fixed.
+// Works only on WebView window.
+func (w Window) SetResizable(status bool) {
+	C.webui_set_resizable(C.size_t(w), C._Bool(status))
+}
+
+// SetFrameless makes a WebView window frameless.
+func (w Window) SetFrameless(status bool) {
+	C.webui_set_frameless(C.size_t(w), C._Bool(status))
+}
+
+// SetTransparent makes a WebView window transparent.
+func (w Window) SetTransparent(status bool) {
+	C.webui_set_transparent(C.size_t(w), C._Bool(status))
+}
+
+// GetHwnd gets window HWND. More reliable with WebView than web browser window,
+// as browser PIDs may change on launch.
+// Returns the window hwnd in Win32, GtkWindow in Linux.
+func (w Window) GetHwnd() unsafe.Pointer {
+	return unsafe.Pointer(C.webui_get_hwnd(C.size_t(w)))
+}
+
+// Win32GetHwnd gets Win32 window HWND. More reliable with WebView than web browser window,
+// as browser PIDs may change on launch.
+func (w Window) Win32GetHwnd() unsafe.Pointer {
+	return unsafe.Pointer(C.webui_win32_get_hwnd(C.size_t(w)))
+}
+
+// SetBrowserFolder sets custom browser/WebView folder path.
+func SetBrowserFolder(path string) {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	C.webui_set_browser_folder(cpath)
+}
+
+// ShowClient shows a window using embedded HTML, or a file for a specific client.
+// If the window is already open, it will be refreshed. Single client.
+func (e Event) ShowClient(content string) (err error) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	ccontent := C.CString(content)
+	defer C.free(unsafe.Pointer(ccontent))
+	if !C.webui_show_client(cEvent, ccontent) {
+		err = errors.New("error: failed to show window for client")
+	}
+	return
+}
+
+// == Javascript ==============================================================
+
+// Run executes JavaScript without waiting for the response. All clients.
+func (w Window) Run(script string) {
+	cscript := C.CString(script)
+	defer C.free(unsafe.Pointer(cscript))
+	C.webui_run(C.size_t(w), cscript)
+}
+
+// RunClient executes JavaScript without waiting for the response. Single client.
+func (e Event) RunClient(script string) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	cscript := C.CString(script)
+	defer C.free(unsafe.Pointer(cscript))
+	C.webui_run_client(cEvent, cscript)
+}
+
+// Script executes JavaScript and returns the response (Make sure the response buffer can hold the response).
+// The default BufferSize is 8KiB. Works only in single client mode.
+func (w Window) Script(script string, options ScriptOptions) (resp string, err error) {
+	opts := ScriptOptions{
+		Timeout:    options.Timeout,
+		BufferSize: options.BufferSize,
+	}
+	if options.BufferSize == 0 {
+		opts.BufferSize = (1024 * 8)
+	}
+
+	// Create a local buffer to hold the response
+	buffer := make([]byte, uint64(opts.BufferSize))
+
+	// Create a pointer to the local buffer
+	ptr := (*C.char)(unsafe.Pointer(&buffer[0]))
+
+	cscript := C.CString(script)
+	defer C.free(unsafe.Pointer(cscript))
+
+	// Run the script and wait for the response
+	ok := C.webui_script(C.size_t(w), cscript, C.size_t(opts.Timeout), ptr, C.size_t(uint64(opts.BufferSize)))
+	if !ok {
+		err = fmt.Errorf("error: failed to run script: %s.\n", script)
+	}
+	respLen := bytes.IndexByte(buffer[:], 0)
+	resp = string(buffer[:respLen])
+
+	return
+}
+
+// ScriptClient executes JavaScript and returns the response for a specific client.
+// Make sure the response buffer can hold the response. Single client.
+// The default BufferSize is 8KiB.
+func (e Event) ScriptClient(script string, options ScriptOptions) (resp string, err error) {
+	opts := ScriptOptions{
+		Timeout:    options.Timeout,
+		BufferSize: options.BufferSize,
+	}
+	if options.BufferSize == 0 {
+		opts.BufferSize = (1024 * 8)
+	}
+
+	// Create a local buffer to hold the response
+	buffer := make([]byte, uint64(opts.BufferSize))
+
+	// Create a pointer to the local buffer
+	ptr := (*C.char)(unsafe.Pointer(&buffer[0]))
+
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	cscript := C.CString(script)
+	defer C.free(unsafe.Pointer(cscript))
+
+	// Run the script and wait for the response
+	ok := C.webui_script_client(cEvent, cscript, C.size_t(opts.Timeout), ptr, C.size_t(uint64(opts.BufferSize)))
+	if !ok {
+		err = fmt.Errorf("error: failed to run script: %s.\n", script)
+	}
+	respLen := bytes.IndexByte(buffer[:], 0)
+	resp = string(buffer[:respLen])
+
+	return
+}
+
+// SetRuntime sets the runtime for .js and .ts files to Deno and Nodejs.
+func (w Window) SetRuntime(runtime Runtime) {
+	C.webui_set_runtime(C.size_t(w), C.size_t(runtime))
+}
+
+func (e *noArgError) Error() string {
+	return fmt.Sprintf("`%s` did not receive an argument.", e.element)
+}
+
+func (e *getArgError) Error() string {
+	return fmt.Sprintf("error: failed to get argument of type `%s` for `%s`: %v", e.typ, e.element, e.err)
+}
+
+func (e Event) cStruct() *C.webui_event_t {
+	return &C.webui_event_t{
+		window:        C.size_t(e.Window),
+		event_type:    C.size_t(e.EventType),
+		element:       C.CString(e.Element),
+		event_number:  C.size_t(e.eventNumber),
+		bind_id:       C.size_t(e.bindId),
+		client_id:     C.size_t(e.ClientId),
+		connection_id: C.size_t(e.ConnectionId),
+	}
+}
+
+// GetCount returns how many arguments there are in an event.
+func (e Event) GetCount() uint {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	return uint(C.webui_get_count(cEvent))
+}
+
+// GetSize returns the size of the first JavaScript argument.
+func (e Event) GetSize() uint {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	return uint(C.webui_get_size(cEvent))
+}
+
+// GetSize returns the size of the JavaScript at the specified index.
+func (e Event) GetSizeAt(idx uint) uint {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	return uint(C.webui_get_size_at(cEvent, C.size_t(idx)))
+}
+
+// ReturnInt returns the response to JavaScript as integer.
+func (e Event) ReturnInt(n int64) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	C.webui_return_int(cEvent, C.longlong(n))
+}
+
+// ReturnFloat returns the response to JavaScript as float.
+func (e Event) ReturnFloat(f float64) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	C.webui_return_float(cEvent, C.double(f))
+}
+
+// ReturnString returns the response to JavaScript as string.
+func (e Event) ReturnString(s string) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	cs := C.CString(s)
+	defer C.free(unsafe.Pointer(cs))
+	C.webui_return_string(cEvent, cs)
+}
+
+// ReturnBool returns the response to JavaScript as boolean.
+func (e Event) ReturnBool(b bool) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	C.webui_return_bool(cEvent, C._Bool(b))
+}
+
+// GetArg parses the JavaScript argument into a Go data type.
+func GetArg[T any](e Event) (arg T, err error) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	if uint(C.webui_get_size(cEvent)) == 0 {
+		err = &noArgError{e.Element}
+	}
+	var ret T
+	switch p := any(&ret).(type) {
+	case *string:
+		*p = C.GoString(C.webui_get_string(cEvent))
+	case *int:
+		*p = int(C.webui_get_int(cEvent))
+	case *float64:
+		*p = float64(C.webui_get_float(cEvent))
+	case *bool:
+		*p = bool(C.webui_get_bool(cEvent))
+	case *[]byte:
+		size := C.webui_get_size(cEvent)
+		ptr := C.webui_get_string(cEvent)
+		if ptr != nil && size > 0 {
+			*p = C.GoBytes(unsafe.Pointer(ptr), C.int(size))
+		} else {
+			*p = []byte{}
+		}
+	default:
+		if jsonErr := json.Unmarshal([]byte(C.GoString(C.webui_get_string(cEvent))), p); err != nil {
+			err = &getArgError{jsonErr, e.Element, reflect.TypeOf(ret).String()}
+		}
+	}
+	arg = ret
+	return
+}
+
+// GetArgAt parses the JavaScript argument with the specified index into a Go data type.
+func GetArgAt[T any](e Event, idx uint) (arg T, err error) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	cIdx := C.size_t(idx)
+	if uint(C.webui_get_size_at(cEvent, cIdx)) == 0 {
+		err = &noArgError{e.Element}
+	}
+	var ret T
+	switch p := any(&ret).(type) {
+	case *string:
+		*p = C.GoString(C.webui_get_string_at(cEvent, cIdx))
+	case *int:
+		*p = int(C.webui_get_int_at(cEvent, cIdx))
+	case *float64:
+		*p = float64(C.webui_get_float_at(cEvent, cIdx))
+	case *bool:
+		*p = bool(C.webui_get_bool_at(cEvent, cIdx))
+	case *[]byte:
+		size := C.webui_get_size_at(cEvent, cIdx)
+		ptr := C.webui_get_string_at(cEvent, cIdx)
+		if ptr != nil && size > 0 {
+			*p = C.GoBytes(unsafe.Pointer(ptr), C.int(size))
+		} else {
+			*p = []byte{}
+		}
+	default:
+		if jsonErr := json.Unmarshal([]byte(C.GoString(C.webui_get_string_at(cEvent, cIdx))), p); err != nil {
+			err = &getArgError{jsonErr, e.Element, reflect.TypeOf(ret).String()}
+		}
+	}
+	arg = ret
+	return
+}
+
+// GetBestBrowser returns the recommended web browser ID to use.
+// If you are already using one, this function will return the same ID.
+func (w Window) GetBestBrowser() Browser {
+	return Browser(C.webui_get_best_browser(C.size_t(w)))
+}
+
+// BrowserExists checks if a web browser is installed.
+func BrowserExists(browser Browser) bool {
+	return bool(C.webui_browser_exist(C.size_t(browser)))
+}
+
+// StartServer starts only the web server and returns the URL.
+// No window will be shown.
+func (w Window) StartServer(content string) string {
+	ccontent := C.CString(content)
+	defer C.free(unsafe.Pointer(ccontent))
+	return C.GoString(C.webui_start_server(C.size_t(w), ccontent))
+}
+
+// GetFreePort returns an available usable free network port.
+func GetFreePort() uint {
+	return uint(C.webui_get_free_port())
+}
+
+// ShowWebView shows a WebView window using embedded HTML or a file.
+// If the window is already open, it will be refreshed.
+// Note: Windows requires WebView2Loader.dll
+func (w Window) ShowWebView(content string) (err error) {
+	ccontent := C.CString(content)
+	defer C.free(unsafe.Pointer(ccontent))
+	if !C.webui_show_wv(C.size_t(w), ccontent) {
+		err = errors.New("error: failed to show WebView window")
+	}
+	return
+}
+
+// SetMinimumSize sets the window minimum size.
+func (w Window) SetMinimumSize(width, height uint) {
+	C.webui_set_minimum_size(C.size_t(w), C.uint(width), C.uint(height))
+}
+
+// SetHighContrast sets the window with high-contrast support.
+// Useful when you want to build a better high-contrast theme with CSS.
+func (w Window) SetHighContrast(status bool) {
+	C.webui_set_high_contrast(C.size_t(w), C._Bool(status))
+}
+
+// IsHighContrast returns whether the OS is using high contrast theme.
+func IsHighContrast() bool {
+	return bool(C.webui_is_high_contrast())
+}
+
+// SetCustomParameters adds user-defined web browser's CLI parameters.
+func (w Window) SetCustomParameters(params string) {
+	cparams := C.CString(params)
+	defer C.free(unsafe.Pointer(cparams))
+	C.webui_set_custom_parameters(C.size_t(w), cparams)
+}
+
+// Focus brings a window to the front and focuses it.
+func (w Window) Focus() {
+	C.webui_focus(C.size_t(w))
+}
+
+// WaitAsync waits asynchronously until all opened windows get closed.
+// Returns true if more windows are still open, false otherwise.
+// In WebView mode, call this from the main thread.
+func WaitAsync() bool {
+	return bool(C.webui_wait_async())
+}
+
+// SetCloseHandlerWebView sets a callback to catch the close event of a WebView window.
+// The handler must return false to prevent the close, or true to allow it.
+func (w Window) SetCloseHandlerWebView(handler func(Window) bool) {
+	closeHandlerList[w] = handler
+	C.go_webui_set_close_handler_wv(C.size_t(w))
+}
+
+// GetMimeType returns the HTTP mime type of a file.
+func GetMimeType(filename string) string {
+	cfilename := C.CString(filename)
+	defer C.free(unsafe.Pointer(cfilename))
+	return C.GoString(C.webui_get_mime_type(cfilename))
+}
+
+// OpenURL opens a URL in the native default web browser.
+func OpenURL(url string) {
+	curl := C.CString(url)
+	defer C.free(unsafe.Pointer(curl))
+	C.webui_open_url(curl)
+}
+
+// SetTLSCertificate sets the SSL/TLS certificate and the private key content,
+// both in PEM format. This works only with `webui-2-secure` library.
+// If set empty, WebUI will generate a self-signed certificate.
+func SetTLSCertificate(certificatePEM, privateKeyPEM string) bool {
+	ccert := C.CString(certificatePEM)
+	ckey := C.CString(privateKeyPEM)
+	defer C.free(unsafe.Pointer(ccert))
+	defer C.free(unsafe.Pointer(ckey))
+	return bool(C.webui_set_tls_certificate(ccert, ckey))
+}
+
+// Malloc safely allocates memory using the WebUI memory management system.
+// It can be safely freed using Free() at any time.
+func Malloc(size uint) unsafe.Pointer {
+	return C.webui_malloc(C.size_t(size))
+}
+
+// Free safely frees a buffer allocated by WebUI using Malloc().
+func Free(ptr unsafe.Pointer) {
+	C.webui_free(ptr)
+}
+
+// Memcpy copies raw data from source to destination.
+func Memcpy(dest, src unsafe.Pointer, count uint) {
+	C.webui_memcpy(dest, src, C.size_t(count))
+}
+
+// SendRaw safely sends raw data to the UI. All clients.
+func (w Window) SendRaw(function string, raw []byte) {
+	cfunc := C.CString(function)
+	defer C.free(unsafe.Pointer(cfunc))
+	C.webui_send_raw(C.size_t(w), cfunc, unsafe.Pointer(&raw[0]), C.size_t(len(raw)))
+}
+
+// SendRawClient safely sends raw data to the UI. Single client.
+func (e Event) SendRawClient(function string, raw []byte) {
+	cEvent := e.cStruct()
+	defer C.free(unsafe.Pointer(cEvent.element))
+	cfunc := C.CString(function)
+	defer C.free(unsafe.Pointer(cfunc))
+	C.webui_send_raw_client(cEvent, cfunc, unsafe.Pointer(&raw[0]), C.size_t(len(raw)))
+}
+
+// FileHandler is a function type for custom file handlers.
+// It should return the full HTTP header and body as bytes, and the length.
+type FileHandler func(filename string) ([]byte, int)
+
+// FileHandlerWindow is a function type for custom file handlers with window parameter.
+// It should return the full HTTP header and body as bytes, and the length.
+type FileHandlerWindow func(window Window, filename string) ([]byte, int)
+
+// SetFileHandler sets a custom handler to serve files. This custom handler should
+// return full HTTP header and body. This deactivates any previous handler set with SetFileHandlerWindow.
+func (w Window) SetFileHandler(handler FileHandler) {
+	// Disable auto-waiting for window connection (prevents blocking)
+	SetConfig(ShowWaitConnection, false)
+
+	// Disable WebUI cookies since user provides custom HTTP headers
+	SetConfig(UseCookies, false)
+
+	// Store the handler
+	fileHandlerList[w] = handler
+
+	// Register the C callback
+	C.go_webui_set_file_handler(C.size_t(w))
+}
+
+// SetFileHandlerWindow sets a custom handler to serve files. This custom handler should
+// return full HTTP header and body. This deactivates any previous handler set with SetFileHandler.
+// This version receives the window parameter in the callback.
+func (w Window) SetFileHandlerWindow(handler FileHandlerWindow) {
+	// Disable auto-waiting for window connection (prevents blocking)
+	SetConfig(ShowWaitConnection, false)
+
+	// Disable WebUI cookies since user provides custom HTTP headers
+	SetConfig(UseCookies, false)
+
+	// Store the handler
+	fileHandlerWindowList[w] = handler
+
+	// Register the C callback
+	C.go_webui_set_file_handler_window(C.size_t(w))
+}
+
+// SetResponseFileHandler sets a file handler response if your backend needs async
+// response for SetFileHandler().
+func (w Window) SetResponseFileHandler(response []byte) {
+	if len(response) == 0 {
+		return
+	}
+	C.webui_interface_set_response_file_handler(C.size_t(w), unsafe.Pointer(&response[0]), C.int(len(response)))
+}
+
+// LoggerFunc is a function type for custom logger callbacks.
+type LoggerFunc func(level LoggerLevel, message string, userData unsafe.Pointer)
+
+// SetLogger sets a custom logger function.
+// The logger will be called for all WebUI log messages with the specified level and message.
+func SetLogger(logger LoggerFunc, userData unsafe.Pointer) {
+	// Store the logger function and user data
+	loggerFunc = logger
+	loggerUserData = userData
+
+	// Register the C callback
+	C.go_webui_set_logger(userData)
+}
+
+// GetLastErrorNumber gets the last WebUI error code.
+func GetLastErrorNumber() uint {
+	return uint(C.webui_get_last_error_number())
+}
+
+// GetLastErrorMessage gets the last WebUI error message.
+func GetLastErrorMessage() string {
+	return C.GoString(C.webui_get_last_error_message())
+}

@@ -13,13 +13,19 @@ import (
 )
 
 // Command represents an incoming control command.
+// terminal_id / tab_id aliases are accepted for convenience (they match the
+// names used in responses and events); the documented names are
+// "terminal" and "tab".
 type Command struct {
 	Cmd        string `json:"cmd"`
 	TerminalID string `json:"terminal,omitempty"`
+	Terminal   string `json:"terminal_id,omitempty"` // alias
 	TabID      string `json:"tab,omitempty"`
+	Tab        string `json:"tab_id,omitempty"`      // alias
 	Text       string `json:"text,omitempty"`
 	Direction  string `json:"direction,omitempty"` // "horizontal" or "vertical"
 	Scrollback int    `json:"scrollback,omitempty"` // get_buffer: limit to last N lines
+	JS         string `json:"js,omitempty"`         // eval_js: JS statements to run in the UI
 	RequestID  string `json:"request_id,omitempty"` // For correlating responses
 }
 
@@ -55,6 +61,7 @@ type Handler interface {
 	// Input/Output
 	TypeText(terminalID string, text string) error
 	GetTerminalBuffer(terminalID string, scrollback int) (string, error)
+	EvalJS(js string) (string, error)
 	
 	// State
 	GetState() (interface{}, error)
@@ -138,6 +145,13 @@ func (c *Controller) readLoop() {
 			c.sendError("", "parse_error", fmt.Sprintf("invalid JSON: %v", err))
 			continue
 		}
+		// Resolve the terminal_id / tab_id aliases
+		if cmd.TerminalID == "" {
+			cmd.TerminalID = cmd.Terminal
+		}
+		if cmd.TabID == "" {
+			cmd.TabID = cmd.Tab
+		}
 		
 		c.handleCommand(cmd)
 	}
@@ -211,6 +225,15 @@ func (c *Controller) handleCommand(cmd Command) {
 		} else {
 			resp.Success = true
 			resp.Data = map[string]string{"buffer": buffer}
+		}
+		
+	case "eval_js":
+		result, err := c.handler.EvalJS(cmd.JS)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.Success = true
+			resp.Data = map[string]string{"result": result}
 		}
 		
 	case "get_state":

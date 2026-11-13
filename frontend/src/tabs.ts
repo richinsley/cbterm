@@ -112,6 +112,19 @@ export class TabManager {
         // Update visibility after adding
         this.updateTabBarVisibility();
         
+        // Request a PTY from the backend. Deferred past the 50ms fit so the
+        // terminal is created with its fitted size (a resize message follows
+        // the fit anyway, correcting any drift).
+        const term = pane.terminal!;
+        setTimeout(() => {
+            this.postMessage({
+                type: 'new_terminal',
+                terminalId: term.id,
+                cols: term.terminal.cols,
+                rows: term.terminal.rows,
+            });
+        }, 60);
+        
         return tab;
     }
     
@@ -646,20 +659,8 @@ export class TabManager {
         newTabBtn.className = 'tab new-tab';
         newTabBtn.textContent = '+';
         newTabBtn.addEventListener('click', () => {
+            // createTab() itself requests the PTY from the backend
             this.createTab();
-            // Request new terminal
-            const tab = this.tabs.get(this.activeTabId!);
-            if (tab) {
-                const pane = this.findFirstTerminalPane(tab.rootPane);
-                if (pane?.terminal) {
-                    this.postMessage({
-                        type: 'new_terminal',
-                        terminalId: pane.terminal.id,
-                        cols: pane.terminal.terminal.cols,
-                        rows: pane.terminal.terminal.rows,
-                    });
-                }
-            }
         });
         this.tabBar.appendChild(newTabBtn);
     }
@@ -797,19 +798,10 @@ export class TabManager {
     
     // Handle keyboard shortcuts
     private handleKeyDown(e: KeyboardEvent): void {
-        // Cmd+T: New tab
+        // Cmd+T: New tab (createTab() itself requests the PTY)
         if (e.metaKey && e.key === 't') {
             e.preventDefault();
-            const tab = this.createTab();
-            const pane = this.findFirstTerminalPane(tab.rootPane);
-            if (pane?.terminal) {
-                this.postMessage({
-                    type: 'new_terminal',
-                    terminalId: pane.terminal.id,
-                    cols: pane.terminal.terminal.cols,
-                    rows: pane.terminal.terminal.rows,
-                });
-            }
+            this.createTab();
         }
         
         // Cmd+W: Close pane/tab
